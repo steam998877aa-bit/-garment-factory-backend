@@ -187,18 +187,27 @@ Route::middleware('auth:sanctum')->group(function () {
             ->name('transfers.store');
     });
 
-    /*
-    |----------------------------------------------------------------------
-    | Audit trail — Admin only.
-    |----------------------------------------------------------------------
-    */
-    Route::get('/audit-logs', [AuditLogController::class, 'index'])
-        ->middleware('role:Admin')
-        ->name('audit-logs.index');
+   /*
+|--------------------------------------------------------------------------
+| Audit trail - Admin only.
+|--------------------------------------------------------------------------
+*/
+Route::get('/audit-logs', [AuditLogController::class, 'index'])
+    ->middleware('role:Admin')
+    ->name('audit-logs.index');
 
-        
-});
+}); // إغلاق مجموعة auth:sanctum
+
+/*
+|--------------------------------------------------------------------------
+| Temporary Migration Route (Public)
+|--------------------------------------------------------------------------
+*/
 Route::get('/run-migrations', function () {
-    \Illuminate\Support\Facades\Artisan::call('migrate --force');
-    return 'Migrations completed successfully!';
+    try {
+        \Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
+        return 'Migrations completed successfully!<br><pre>' . \Illuminate\Support\Facades\Artisan::output() . '</pre>';
+    } catch (\Exception $e) {
+        return 'Migration Error: ' . $e->getMessage();
+    }
 });
