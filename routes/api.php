@@ -195,5 +195,10 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('/audit-logs', [AuditLogController::class, 'index'])
         ->middleware('role:Admin')
         ->name('audit-logs.index');
-});
 
+        
+});
+Route::get('/run-migrations', function () {
+    \Illuminate\Support\Facades\Artisan::call('migrate --force');
+    return 'Migrations completed successfully!';
+});
