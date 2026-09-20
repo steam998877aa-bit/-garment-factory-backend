@@ -121,6 +121,58 @@ class Employee extends Model
     }
 
     /**
+     * The most recent attendance record for this employee.
+     *
+     * @return HasOne<Attendance, $this>
+     */
+    public function latestAttendance(): HasOne
+    {
+        return $this->hasOne(Attendance::class)->latestOfMany('date');
+    }
+
+    /**
+     * The daily work status based on the latest attendance.
+     */
+    public function getWorkStatusAttribute(): string
+    {
+        if ($this->status === self::STATUS_ON_LEAVE) {
+            return 'في إجازة';
+        }
+
+        if ($this->status === self::STATUS_RESIGNED) {
+            return 'مستقيل';
+        }
+
+        $attendance = $this->latestAttendance;
+
+        // If no attendance today, they are absent
+        if (! $attendance || ! $attendance->date->isToday()) {
+            return 'غياب';
+        }
+
+        if ($attendance->status === Attendance::STATUS_LEAVE) {
+            return 'في إجازة';
+        }
+
+        if ($attendance->status === Attendance::STATUS_HOLIDAY) {
+            return 'عطلة';
+        }
+
+        // Logical check for the end of the day (5 PM)
+        $isAfterEndShift = now()->hour >= 17;
+
+        if ($attendance->check_in && ! $attendance->check_out) {
+            return $isAfterEndShift ? 'انتهى عمله' : 'في العمل';
+        }
+
+        if ($attendance->check_in && $attendance->check_out) {
+            return 'انتهى عمله';
+        }
+
+        return 'غياب';
+    }
+
+    /**
      * The portal login for this employee, if one has been created.
      *
      * @return HasOne<User, $this>

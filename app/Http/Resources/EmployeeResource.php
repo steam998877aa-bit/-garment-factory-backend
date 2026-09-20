@@ -29,6 +29,7 @@ class EmployeeResource extends JsonResource
             'fingerprint_id' => $this->fingerprint_id,
             'department' => $this->department,
             'status' => $this->status,
+            'work_status' => $this->work_status,
             'position' => $this->position,
             'shift' => $this->shift,
             'vacation_balance' => (float) $this->vacation_balance,

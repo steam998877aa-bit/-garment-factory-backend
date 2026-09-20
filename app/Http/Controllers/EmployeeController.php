@@ -62,6 +62,7 @@ class EmployeeController extends Controller
         $status = Employee::canonicalStatus($filters['status'] ?? null);
 
         $employees = Employee::query()
+            ->with(['latestAttendance'])
             ->when(isset($filters['department']), fn ($query) => $query->where('department', trim($filters['department'])))
             ->when($status !== null, fn ($query) => $query->where('status', $status))
             ->when(isset($filters['position']), fn ($query) => $query->where('position', trim($filters['position'])))

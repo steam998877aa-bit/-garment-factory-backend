@@ -71,9 +71,7 @@ class AttendanceController extends Controller
         } catch (Throwable $e) {
             return response()->json([
                 'status' => false,
-                'message' => $e instanceof \RuntimeException
-                    ? $e->getMessage()
-                    : 'The attendance file could not be read. Please verify that it is a valid xls, xlsx, csv, or txt file.',
+                'message' => $e->getMessage(),
             ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
         } finally {
             Storage::disk('local')->delete($stored);
