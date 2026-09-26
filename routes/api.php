@@ -172,7 +172,8 @@ Route::middleware('auth:sanctum')->group(function () {
 
         Route::get('/productions/{production}', [ProductionController::class, 'show'])->name('productions.show');
         Route::post('/productions', [ProductionController::class, 'store'])->name('productions.store');
-        Route::patch('/productions/{production}', [ProductionController::class, 'update'])->name('productions.update');
+        Route::match(['patch', 'post'], '/productions/{production}', [ProductionController::class, 'update'])->name('productions.update');
+        Route::delete('/productions/{production}', [ProductionController::class, 'destroy'])->name('productions.destroy');
 
         Route::get('/productions/{production}/activity', [ProductionController::class, 'activity'])
             ->name('productions.activity');

@@ -7,6 +7,14 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## Persistent file storage
+
+Product photos, product guide files, and employee documents are stored on the private `local` filesystem, separately from the database. In production, mount a persistent disk or volume and set `PRIVATE_FILESYSTEM_ROOT` to its path (for example, `/data/garment-factory/private`). The same volume and path must be available after every deployment and to every application instance. Ensure the PHP process can write to the mounted directory.
+
+The database stores paths relative to this directory. When migrating existing files, copy the directory contents while preserving their relative paths. Back up the volume alongside the database. Files already removed from an ephemeral container must be restored from a backup.
+
+Keep the same `APP_KEY` across deployments. Employee-document and product-file links are signed with it and expire after 10 minutes; fetch a fresh API response for a new link after it expires.
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:

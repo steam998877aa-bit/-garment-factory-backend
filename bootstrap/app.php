@@ -17,5 +17,14 @@ return Application::configure(basePath: dirname(__DIR__))
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions) {
-        //
+        $exceptions->render(function (\Illuminate\Http\Exceptions\PostTooLargeException $e, $request) {
+            if ($request->expectsJson() || $request->is('api/*')) {
+                return response()->json([
+                    'message' => 'حجم الملفات المرفوعة كبير جداً. الحد الأقصى المسموح به هو 32 ميجابايت.',
+                    'errors' => [
+                        'file' => ['حجم الملفات المرفوعة يتجاوز الحد المسموح.']
+                    ]
+                ], 422);
+            }
+        });
     })->create();

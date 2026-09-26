@@ -159,9 +159,8 @@ class ProductionController extends Controller
 
         $data = $request->validate($this->rules());
 
-        $images = $data['images'] ?? null;
+        $images = $this->imageUploads($request);
         $guides = $this->guideUploads($request);
-        unset($data['images']);
 
         $data['design_status'] ??= '';
         $data = $this->canonicalisePlacement($data);
@@ -218,12 +217,11 @@ class ProductionController extends Controller
         // Captured before the write: Eloquent resyncs originals during save.
         $before = $production->getOriginal();
 
-        $images = $data['images'] ?? null;
+        $images = $this->imageUploads($request);
         $guides = $this->guideUploads($request);
         $remove = $data['remove_images'] ?? null;
         $removeGuides = $data['remove_guide_files'] ?? null;
         unset(
-            $data['images'],
             $data['remove_images'],
             $data['remove_guide_files'],
         );
@@ -260,6 +258,40 @@ class ProductionController extends Controller
         ]);
 
         return new ProductionResource($production);
+    }
+
+    /**
+     * Delete a product that has no transfer history.
+     */
+    public function destroy(Request $request, Production $production): JsonResponse
+    {
+        $this->authorize('delete', $production);
+        $this->confirmPassword($request);
+
+        if ($production->transfers()->exists()) {
+            return response()->json([
+                'status' => false,
+                'message' => 'لا يمكن حذف منتج له سجل تحويلات.',
+            ], JsonResponse::HTTP_CONFLICT);
+        }
+
+        $snapshot = [
+            'production_id' => $production->id,
+            'barcode' => $production->barcode,
+            'item_number' => $production->item_number,
+            'department' => $production->department,
+            'serial_number' => $production->serial_number,
+        ];
+
+        $this->files->deleteAll($production);
+        $production->delete();
+
+        $this->audit->log('production.deleted', $snapshot);
+
+        return response()->json([
+            'status' => true,
+            'message' => 'تم حذف المنتج.',
+        ]);
     }
 
     /**
@@ -309,6 +341,48 @@ class ProductionController extends Controller
      * only ever deals with a list.
      *
      * They are validated here rather than in rules() because the request itself
+    /**
+     * Product image uploads on this request, under whichever field name they arrived.
+     *
+     * Accepts `images`, `images[]`, `image`, or `images[0]`.
+     *
+     * @return list<UploadedFile>|null
+     */
+    protected function imageUploads(Request $request): ?array
+    {
+        $files = array_merge(
+            $this->uploadList($request->file('images')),
+            $this->uploadList($request->file('image')),
+        );
+
+        if ($files === []) {
+            return null;
+        }
+
+        Validator::make(['images' => $files], [
+            'images' => ['array', 'max:10'],
+            'images.*' => ['file', 'mimes:jpg,jpeg,png,webp', 'max:20480'],
+        ], [
+            'images.*.file' => 'فشل رفع صورة المنتج. يرجى التحقق من حجم الصورة ونوعها.',
+            'images.*.uploaded' => 'فشل رفع صورة المنتج. يرجى التحقق من حجم الصورة ونوعها.',
+            'images.*.mimes' => 'يجب أن تكون صورة المنتج من نوع: jpg, jpeg, png, webp.',
+            'images.*.max' => 'يجب ألا يزيد حجم صورة المنتج عن 20 ميجابايت.',
+        ], [
+            'images.*' => 'صورة المنتج',
+        ])->validate();
+
+        return $files;
+    }
+
+    /**
+     * The guide files on this request, whichever field name they arrived under.
+     *
+     * Guide files are a list now, but a client may send them as `guide_file`
+     * (one file — the shape this API used to take), `guide_file[]`, or
+     * `guide_files[]`. All three are read here so the rest of the controller
+     * only ever deals with a list.
+     *
+     * They are validated here rather than in rules() because the request itself
      * is left untouched: Laravel caches its converted uploads on first read, so
      * rewriting the file bag to fold one field into another is not reliably
      * visible to the validator afterwards.
@@ -331,7 +405,14 @@ class ProductionController extends Controller
         Validator::make(['guide_files' => $files], [
             'guide_files' => ['array', 'max:10'],
             // A technical pack as PDF, or a photographed sheet.
-            'guide_files.*' => ['file', 'mimes:pdf,jpg,jpeg,png', 'max:20480'],
+            'guide_files.*' => ['file', 'mimes:pdf,jpg,jpeg,png,webp', 'max:20480'],
+        ], [
+            'guide_files.*.file' => 'فشل رفع ملف التوجيه. يرجى التحقق من حجم الملف ونوعه.',
+            'guide_files.*.uploaded' => 'فشل رفع ملف التوجيه. يرجى التحقق من حجم الملف ونوعه.',
+            'guide_files.*.mimes' => 'يجب أن يكون ملف التوجيه من نوع: pdf, jpg, jpeg, png, webp.',
+            'guide_files.*.max' => 'يجب ألا يزيد حجم ملف التوجيه عن 20 ميجابايت.',
+        ], [
+            'guide_files.*' => 'ملف التوجيه',
         ])->validate();
 
         return $files;
@@ -908,9 +989,8 @@ class ProductionController extends Controller
             'fabric' => [$required, 'string', 'max:255'],
             'design_status' => ['sometimes', 'nullable', 'string', 'max:255'],
 
-            // Product images — several may be uploaded at once.
-            'images' => ['sometimes', 'array', 'max:10'],
-            'images.*' => ['file', 'mimes:jpg,jpeg,png', 'max:5120'],
+            // Product image uploads are validated in imageUploads(), which accepts
+            // them under images, images[], image, or images[0].
 
             // Paths of existing images to detach, sent on update.
             'remove_images' => ['sometimes', 'array'],

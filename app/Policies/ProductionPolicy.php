@@ -27,6 +27,11 @@ class ProductionPolicy
         return $user->hasRole('Admin', 'Production Manager');
     }
 
+    public function delete(User $user, Production $production): bool
+    {
+        return $user->hasRole('Admin', 'Production Manager');
+    }
+
     /**
      * Moving stock between departments changes the factory's physical record.
      */
