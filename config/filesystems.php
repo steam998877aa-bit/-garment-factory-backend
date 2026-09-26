@@ -38,6 +38,16 @@ return [
             'report' => false,
         ],
 
+        'cloudinary' => [
+            'driver' => 'cloudinary',
+            'url' => env('CLOUDINARY_URL') ?: null,
+            'key' => env('CLOUDINARY_KEY'),
+            'secret' => env('CLOUDINARY_SECRET'),
+            'cloud' => env('CLOUDINARY_CLOUD_NAME'),
+            'secure' => true,
+            'prefix' => env('CLOUDINARY_PREFIX'),
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

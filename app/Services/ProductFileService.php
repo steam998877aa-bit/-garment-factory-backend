@@ -3,8 +3,14 @@
 namespace App\Services;
 
 use App\Models\Production;
+use Cloudinary\Asset\DeliveryType;
+use Cloudinary\Cloudinary;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
+use RuntimeException;
+use Symfony\Component\HttpFoundation\Response;
 
 /**
  * Stores and removes the image and guide files attached to a product.
@@ -13,12 +19,14 @@ use Illuminate\Support\Facades\Storage;
  * pack and a product photo is unreleased design work, so both are served
  * through authorised controller endpoints rather than a guessable public URL.
  *
- * Images and guide files behave identically: an upload adds to what the product
- * already has, and files are deleted only when named explicitly. Nothing on
- * disk is discarded as a side effect of an unrelated edit.
+ * Product photos use authenticated Cloudinary assets; guide files remain on
+ * the private local disk. Uploads are additive and files are deleted only when
+ * named explicitly.
  */
 class ProductFileService
 {
+    public const CLOUDINARY_PREFIX = 'cloudinary:';
+
     public const DISK = 'local';
 
     public const IMAGE_DIRECTORY = 'products/images';
@@ -33,7 +41,30 @@ class ProductFileService
      */
     public function storeImages(array $files): array
     {
-        return $this->store($files, self::IMAGE_DIRECTORY);
+        $paths = [];
+
+        foreach ($files as $file) {
+            $sourcePath = $file->getRealPath();
+
+            if ($sourcePath === false) {
+                throw new RuntimeException('The uploaded product image could not be read.');
+            }
+
+            $paths[] = $this->uploadImage($sourcePath);
+        }
+
+        return $paths;
+    }
+
+    public function storeLocalImage(string $path): string
+    {
+        $disk = Storage::disk(self::DISK);
+
+        if (! $disk->exists($path)) {
+            throw new RuntimeException("The local product image is missing: {$path}");
+        }
+
+        return $this->uploadImage($disk->path($path));
     }
 
     /**
@@ -75,12 +106,37 @@ class ProductFileService
     public function deleteAll(Production $production): void
     {
         foreach ($production->images ?? [] as $path) {
-            Storage::disk(self::DISK)->delete($path);
+            $this->deleteImage($path);
         }
 
         foreach ($production->guide_files ?? [] as $path) {
             Storage::disk(self::DISK)->delete($path);
         }
+    }
+
+    public function imageResponse(string $path): Response
+    {
+        if (! $this->isCloudinaryImage($path)) {
+            $disk = Storage::disk(self::DISK);
+            abort_unless($disk->exists($path), Response::HTTP_NOT_FOUND, 'Image file is missing.');
+
+            return $disk->response($path);
+        }
+
+        [$publicId, $format] = $this->cloudinaryImageParts($path);
+        $url = $this->cloudinary()->image($publicId)
+            ->deliveryType(DeliveryType::AUTHENTICATED)
+            ->extension($format)
+            ->signUrl()
+            ->toUrl();
+        $remote = Http::timeout(30)->get((string) $url);
+
+        abort_unless($remote->successful(), Response::HTTP_NOT_FOUND, 'Image file is missing.');
+
+        return response($remote->body(), Response::HTTP_OK, [
+            'Content-Type' => $remote->header('Content-Type') ?: 'image/'.$format,
+            'Cache-Control' => 'private, no-store',
+        ]);
     }
 
     /**
@@ -129,9 +185,79 @@ class ProductFileService
         $removable = array_values(array_intersect($current, $paths));
 
         foreach ($removable as $path) {
-            Storage::disk(self::DISK)->delete($path);
+            $this->deleteImage($path);
         }
 
         return array_values(array_diff($current, $removable));
+    }
+
+    protected function deleteImage(string $path): void
+    {
+        if (! $this->isCloudinaryImage($path)) {
+            Storage::disk(self::DISK)->delete($path);
+
+            return;
+        }
+
+        [$publicId] = $this->cloudinaryImageParts($path);
+        $result = $this->cloudinary()->uploadApi()->destroy($publicId, [
+            'resource_type' => 'image',
+            'type' => DeliveryType::AUTHENTICATED,
+            'invalidate' => true,
+        ]);
+
+        if (($result['result'] ?? null) !== 'ok' && ($result['result'] ?? null) !== 'not found') {
+            throw new RuntimeException('Cloudinary could not delete the product image.');
+        }
+    }
+
+    protected function uploadImage(string $sourcePath): string
+    {
+        $prefix = trim((string) config('filesystems.disks.cloudinary.prefix'), '/');
+        $publicId = trim(implode('/', array_filter([
+            $prefix,
+            self::IMAGE_DIRECTORY,
+            (string) Str::uuid(),
+        ])), '/');
+        $asset = $this->cloudinary()->uploadApi()->upload($sourcePath, [
+            'public_id' => $publicId,
+            'resource_type' => 'image',
+            'type' => DeliveryType::AUTHENTICATED,
+            'overwrite' => false,
+        ]);
+
+        return self::CLOUDINARY_PREFIX.$asset['public_id'].'.'.$asset['format'];
+    }
+
+    protected function isCloudinaryImage(string $path): bool
+    {
+        return str_starts_with($path, self::CLOUDINARY_PREFIX);
+    }
+
+    /**
+     * @return array{string, string}
+     */
+    protected function cloudinaryImageParts(string $path): array
+    {
+        $asset = substr($path, strlen(self::CLOUDINARY_PREFIX));
+        $extensionPosition = strrpos($asset, '.');
+
+        if ($extensionPosition === false) {
+            throw new RuntimeException('The Cloudinary image reference is invalid.');
+        }
+
+        return [substr($asset, 0, $extensionPosition), substr($asset, $extensionPosition + 1)];
+    }
+
+    protected function cloudinary(): Cloudinary
+    {
+        $disk = config('filesystems.disks.cloudinary');
+
+        if (blank($disk['url'] ?? null)
+            && (blank($disk['key'] ?? null) || blank($disk['secret'] ?? null) || blank($disk['cloud'] ?? null))) {
+            throw new RuntimeException('Set CLOUDINARY_URL or CLOUDINARY_KEY, CLOUDINARY_SECRET, and CLOUDINARY_CLOUD_NAME.');
+        }
+
+        return app(Cloudinary::class);
     }
 }

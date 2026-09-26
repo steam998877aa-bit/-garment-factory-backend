@@ -9,7 +9,11 @@
 
 ## Persistent file storage
 
-Product photos, product guide files, and employee documents are stored on the private `local` filesystem, separately from the database. In production, mount a persistent disk or volume and set `PRIVATE_FILESYSTEM_ROOT` to its path (for example, `/data/garment-factory/private`). The same volume and path must be available after every deployment and to every application instance. Ensure the PHP process can write to the mounted directory.
+New product photos are uploaded to Cloudinary as authenticated assets and are still served through the application's temporary signed URLs. Set `CLOUDINARY_URL` (recommended) or all of `CLOUDINARY_KEY`, `CLOUDINARY_SECRET`, and `CLOUDINARY_CLOUD_NAME` in the deployment environment. Never commit these credentials. The Cloudinary package filesystem adapter uploads public assets by default, so product photos use the authenticated Cloudinary API instead.
+
+To move existing product photos, first run `php artisan productions:images-cloudinary` for a report, then run `php artisan productions:images-cloudinary --force` to upload and update database paths while retaining local copies. After verifying the images, `--force --delete-local` removes each local copy only after its new reference is saved.
+
+Existing product photos, product guide files, and employee documents remain on the private `local` filesystem. In production, mount a persistent disk or volume and set `PRIVATE_FILESYSTEM_ROOT` to its path (for example, `/data/garment-factory/private`). The same volume and path must be available after every deployment and to every application instance. Ensure the PHP process can write to the mounted directory. Employee identity documents stay on this private volume and are not uploaded to Cloudinary.
 
 The database stores paths relative to this directory. When migrating existing files, copy the directory contents while preserving their relative paths. Back up the volume alongside the database. Files already removed from an ephemeral container must be restored from a backup.
 

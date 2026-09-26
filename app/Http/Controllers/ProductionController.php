@@ -20,6 +20,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Validation\ValidationException;
 use RuntimeException;
+use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class ProductionController extends Controller
@@ -297,14 +298,13 @@ class ProductionController extends Controller
     /**
      * Stream one of the product's images to an authorised caller.
      */
-    public function image(Request $request, Production $production, int $index): StreamedResponse
+    public function image(Request $request, Production $production, int $index): Response
     {
         $path = ($production->images ?? [])[$index] ?? null;
 
         abort_if($path === null, JsonResponse::HTTP_NOT_FOUND, 'Image not found.');
-        abort_unless(Storage::disk(ProductFileService::DISK)->exists($path), JsonResponse::HTTP_NOT_FOUND, 'Image file is missing.');
 
-        return Storage::disk(ProductFileService::DISK)->response($path);
+        return $this->files->imageResponse($path);
     }
 
     /**
