@@ -174,6 +174,7 @@ Route::middleware('auth:sanctum')->group(function () {
         Route::post('/productions', [ProductionController::class, 'store'])->name('productions.store');
         Route::match(['patch', 'post'], '/productions/{production}', [ProductionController::class, 'update'])->name('productions.update');
         Route::delete('/productions/{production}', [ProductionController::class, 'destroy'])->name('productions.destroy');
+        Route::post('/productions/{production}/delete', [ProductionController::class, 'destroy'])->name('productions.destroy.post');
 
         Route::get('/productions/{production}/activity', [ProductionController::class, 'activity'])
             ->name('productions.activity');

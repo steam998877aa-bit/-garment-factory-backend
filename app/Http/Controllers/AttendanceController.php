@@ -95,6 +95,8 @@ class AttendanceController extends Controller
             'message' => $dryRun
                 ? "Validated {$result['parsed']} record(s). Nothing was saved."
                 : "Imported {$result['imported']} attendance record(s).",
+            'total_rows' => $result['total_rows'] ?? 0,
+            'parsed' => $result['parsed'] ?? 0,
             'summary' => $result,
         ]);
     }

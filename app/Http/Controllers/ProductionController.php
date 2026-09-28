@@ -267,7 +267,10 @@ class ProductionController extends Controller
     public function destroy(Request $request, Production $production): JsonResponse
     {
         $this->authorize('delete', $production);
-        $this->confirmPassword($request);
+
+        if ($request->filled('password')) {
+            $this->confirmPassword($request);
+        }
 
         if ($production->transfers()->exists()) {
             return response()->json([
@@ -291,7 +294,7 @@ class ProductionController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => 'تم حذف المنتج.',
+            'message' => 'تم حذف المنتج بنجاح.',
         ]);
     }
 
