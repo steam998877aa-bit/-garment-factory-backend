@@ -36,7 +36,7 @@ class AttendanceController extends Controller
         $this->authorize('import', Attendance::class);
 
         $request->validate([
-            'file' => ['required', 'file', 'mimes:xlsx,xls,csv,txt', 'max:20480'],
+            'file' => ['required', 'file', 'max:20480'],
             // Not the 'boolean' rule: it accepts only 0 and 1, and in a
             // multipart body every field arrives as a string, so a client
             // sending true was rejected. boolean() below reads them all.
@@ -45,6 +45,15 @@ class AttendanceController extends Controller
             'password' => ['sometimes', 'string'],
         ]);
 
+        $upload = $request->file('file');
+        $extension = strtolower($upload->getClientOriginalExtension());
+        if (! in_array($extension, ['xlsx', 'xls', 'csv', 'txt'], true)) {
+            return response()->json([
+                'status' => false,
+                'message' => 'نوع الملف غير مدعوم. يرجى اختيار ملف Excel (.xls أو .xlsx) أو CSV.',
+            ], JsonResponse::HTTP_UNPROCESSABLE_ENTITY);
+        }
+
         // A real import overwrites recorded attendance days, so it is
         // re-authenticated. A dry run changes nothing and is not.
         if (! $request->boolean('dry_run')) {
@@ -52,11 +61,9 @@ class AttendanceController extends Controller
         }
 
         $dryRun = $request->boolean('dry_run');
-        $upload = $request->file('file');
 
         // PHP names the uploaded temp file without an extension. Preserve the
         // original xls/xlsx extension so PhpSpreadsheet selects the right reader.
-        $extension = strtolower($upload->getClientOriginalExtension());
         $stored = $upload->storeAs(
             'attendance-imports',
             Str::uuid()->toString() . '.' . $extension,

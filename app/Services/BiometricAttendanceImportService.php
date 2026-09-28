@@ -17,7 +17,7 @@ class BiometricAttendanceImportService
      *
      * Rules:
      * 1. Character encoding conversion (UTF-8, GBK, Windows-1256, etc.).
-     * 2. Index-based column reading (Col A/C for Fingerprint ID, Col D/E for Date & Time, Col G for Punch Type).
+     * 2. Index-based column reading (Col A/B/C for Fingerprint ID, Col D/E for Date & Time, Col G for Punch Type).
      * 3. Deduplication:
      *    - Check-in: Earliest punch between 07:00 AM and 10:00 AM.
      *    - Check-out: Latest punch between 04:00 PM (16:00) and 07:00 PM (19:00).
@@ -25,12 +25,16 @@ class BiometricAttendanceImportService
      */
     public function import(string $path, bool $dryRun = false): array
     {
-        if (!is_readable($path)) {
+        if (!file_exists($path) || !is_readable($path)) {
             throw new RuntimeException("ملف البصمات غير موجود أو لا يمكن قراءته.");
         }
 
         $grid = $this->readGrid($path);
+        if (empty($grid)) {
+            throw new RuntimeException("ملف البصمات فارغ أو تعذرت قراءته.");
+        }
 
+        $totalGridRows = 0;
         $punchesByEmpAndDate = [];
         $unmatched = [];
         $importedDates = [];
@@ -38,29 +42,54 @@ class BiometricAttendanceImportService
         $employeesMap = Employee::query()
             ->whereNotNull('fingerprint_id')
             ->get()
-            ->keyBy('fingerprint_id');
+            ->keyBy(fn ($emp) => (string) $emp->fingerprint_id);
 
         // Loop through all data rows
         foreach ($grid as $rowIndex => $cells) {
-            $valA = $this->sanitizeEncoding($cells['A'] ?? '');
-            $valB = $this->sanitizeEncoding($cells['B'] ?? '');
-            $valC = $this->sanitizeEncoding($cells['C'] ?? '');
-            $valD = $this->sanitizeEncoding($cells['D'] ?? '');
-            $valE = $this->sanitizeEncoding($cells['E'] ?? '');
-            $valF = $this->sanitizeEncoding($cells['F'] ?? '');
-            $valG = $this->sanitizeEncoding($cells['G'] ?? '');
-            $valH = $this->sanitizeEncoding($cells['H'] ?? '');
-
-            // Determine Fingerprint ID (Column C or A)
-            $fingerprintId = null;
-            if (is_numeric($valC)) {
-                $fingerprintId = $valC;
-            } elseif (is_numeric($valA)) {
-                $fingerprintId = $valA;
+            if (!is_array($cells)) {
+                continue;
             }
 
+            // Skip completely empty rows
+            $hasContent = false;
+            foreach ($cells as $cellVal) {
+                if ($cellVal !== null && trim((string)$cellVal) !== '') {
+                    $hasContent = true;
+                    break;
+                }
+            }
+            if (!$hasContent) {
+                continue;
+            }
+
+            $totalGridRows++;
+
+            $getVal = function (array $keys) use ($cells): string {
+                foreach ($keys as $k) {
+                    if (isset($cells[$k]) && $cells[$k] !== null) {
+                        $str = $this->sanitizeEncoding($cells[$k]);
+                        if ($str !== '') {
+                            return $str;
+                        }
+                    }
+                }
+                return '';
+            };
+
+            $valA = $getVal(['A', 1, 0]);
+            $valB = $getVal(['B', 2, 1]);
+            $valC = $getVal(['C', 3, 2]);
+            $valD = $getVal(['D', 4, 3]);
+            $valE = $getVal(['E', 5, 4]);
+            $valF = $getVal(['F', 6, 5]);
+            $valG = $getVal(['G', 7, 6]);
+            $valH = $getVal(['H', 8, 7]);
+
+            // Determine Fingerprint ID
+            $fingerprintId = $this->extractFingerprintId($valC, $valA, $valB);
+
             if ($fingerprintId === null) {
-                continue; // Skip non-numeric header rows
+                continue; // Skip header or non-numeric title rows
             }
 
             // Check if format is Summary Format (Check-in in Col C, Check-out in Col D)
@@ -86,9 +115,10 @@ class BiometricAttendanceImportService
             $dt = $this->parseDateTime(!empty($valE) ? $valE : $valD);
 
             if ($dt === null) {
-                $datePart = $this->normaliseDate($valD);
-                if ($datePart && !empty($valE)) {
-                    $dt = $this->parseDateTime($datePart . ' ' . $valE);
+                $datePart = $this->normaliseDate($valD ?: $valB);
+                $timePart = !empty($valE) ? $valE : (!empty($valC) && $this->isTimeString($valC) ? $valC : '');
+                if ($datePart && !empty($timePart)) {
+                    $dt = $this->parseDateTime($datePart . ' ' . $timePart);
                 }
             }
 
@@ -194,7 +224,6 @@ class BiometricAttendanceImportService
 
         $finalRows = array_values($rows);
         $matchedCount = count(array_filter($finalRows, fn($r) => $r['employee_id'] !== null));
-        $totalGridRows = count($grid);
 
         if (!$dryRun && !empty($finalRows)) {
             foreach (array_chunk($finalRows, 500) as $chunk) {
@@ -221,6 +250,30 @@ class BiometricAttendanceImportService
             'unmatched_fingerprints' => array_values($unmatched),
             'dates_imported' => array_keys($importedDates),
         ];
+    }
+
+    /**
+     * Extract clean fingerprint ID from potential candidate values.
+     */
+    protected function extractFingerprintId(string ...$candidates): ?string
+    {
+        foreach ($candidates as $val) {
+            $cleaned = trim($val);
+            if ($cleaned === '') {
+                continue;
+            }
+
+            // Remove float trailing decimals like '101.0'
+            if (preg_match('/^(\d+)\.0+$/', $cleaned, $m)) {
+                $cleaned = $m[1];
+            }
+
+            if (ctype_digit($cleaned)) {
+                return (string) (int) $cleaned;
+            }
+        }
+
+        return null;
     }
 
     /**
@@ -305,11 +358,39 @@ class BiometricAttendanceImportService
 
     protected function readGrid(string $path): array
     {
-        $spreadsheet = IOFactory::load($path);
+        $spreadsheet = null;
+
+        try {
+            $spreadsheet = IOFactory::load($path);
+        } catch (Throwable) {
+            $readers = ['Xlsx', 'Xls', 'Csv', 'Html'];
+            foreach ($readers as $readerType) {
+                try {
+                    $reader = IOFactory::createReader($readerType);
+                    if ($readerType === 'Csv') {
+                        $reader->setInputEncoding('UTF-8');
+                    }
+                    if ($reader->canRead($path)) {
+                        $spreadsheet = $reader->load($path);
+                        break;
+                    }
+                } catch (Throwable) {
+                    continue;
+                }
+            }
+        }
+
+        if (!$spreadsheet) {
+            return [];
+        }
+
         foreach ($spreadsheet->getAllSheets() as $sheet) {
             $data = $sheet->toArray(null, false, false, true);
-            if (count($data) > 0) return $data;
+            if (!empty($data)) {
+                return $data;
+            }
         }
+
         return [];
     }
 
