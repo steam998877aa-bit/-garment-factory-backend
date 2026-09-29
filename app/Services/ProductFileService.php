@@ -67,6 +67,14 @@ class ProductFileService
         return $this->uploadImage($disk->path($path));
     }
 
+    public function hasCloudinary(): bool
+    {
+        $disk = config('filesystems.disks.cloudinary');
+
+        return ! blank($disk['url'] ?? null)
+            || (! blank($disk['key'] ?? null) && ! blank($disk['secret'] ?? null) && ! blank($disk['cloud'] ?? null));
+    }
+
     /**
      * Store newly uploaded guide files and return their paths.
      *
@@ -75,6 +83,22 @@ class ProductFileService
      */
     public function storeGuideFiles(array $files): array
     {
+        if ($this->hasCloudinary()) {
+            $paths = [];
+
+            foreach ($files as $file) {
+                $sourcePath = $file->getRealPath();
+
+                if ($sourcePath === false) {
+                    throw new RuntimeException('The uploaded guide file could not be read.');
+                }
+
+                $paths[] = $this->uploadGuideFile($sourcePath, $file->getClientOriginalExtension());
+            }
+
+            return $paths;
+        }
+
         return $this->store($files, self::GUIDE_DIRECTORY);
     }
 
@@ -90,14 +114,20 @@ class ProductFileService
     }
 
     /**
-     * Remove specific guide files from a product and delete them from disk.
+     * Remove specific guide files from a product and delete them from disk or cloud.
      *
      * @param  list<string>  $paths
      * @return list<string> The product's remaining guide file paths.
      */
     public function removeGuideFiles(Production $production, array $paths): array
     {
-        return $this->remove($production->guide_files ?? [], $paths);
+        $removable = array_values(array_intersect($production->guide_files ?? [], $paths));
+
+        foreach ($removable as $path) {
+            $this->deleteGuideFile($path);
+        }
+
+        return array_values(array_diff($production->guide_files ?? [], $removable));
     }
 
     /**
@@ -110,7 +140,7 @@ class ProductFileService
         }
 
         foreach ($production->guide_files ?? [] as $path) {
-            Storage::disk(self::DISK)->delete($path);
+            $this->deleteGuideFile($path);
         }
     }
 
@@ -135,6 +165,50 @@ class ProductFileService
 
         return response($remote->body(), Response::HTTP_OK, [
             'Content-Type' => $remote->header('Content-Type') ?: 'image/'.$format,
+            'Cache-Control' => 'private, no-store',
+        ]);
+    }
+
+    public function guideFileResponse(string $path): Response
+    {
+        if (! $this->isCloudinaryImage($path)) {
+            $disk = Storage::disk(self::DISK);
+            abort_unless($disk->exists($path), Response::HTTP_NOT_FOUND, 'Guide file is missing.');
+
+            $mimeType = $disk->mimeType($path) ?: 'application/octet-stream';
+
+            return $disk->response(
+                $path,
+                basename($path),
+                ['Content-Type' => $mimeType],
+                'inline',
+            );
+        }
+
+        [$publicId, $format] = $this->cloudinaryImageParts($path);
+        $url = $this->cloudinary()->image($publicId)
+            ->deliveryType(DeliveryType::AUTHENTICATED)
+            ->extension($format)
+            ->signUrl()
+            ->toUrl();
+        $remote = Http::timeout(30)->get((string) $url);
+
+        if (! $remote->successful()) {
+            $rawUrl = $this->cloudinary()->raw($publicId.'.'.$format)
+                ->deliveryType(DeliveryType::AUTHENTICATED)
+                ->signUrl()
+                ->toUrl();
+            $remote = Http::timeout(30)->get((string) $rawUrl);
+        }
+
+        abort_unless($remote->successful(), Response::HTTP_NOT_FOUND, 'Guide file is missing.');
+
+        $mimeType = $remote->header('Content-Type')
+            ?: (strtolower($format) === 'pdf' ? 'application/pdf' : 'image/'.$format);
+
+        return response($remote->body(), Response::HTTP_OK, [
+            'Content-Type' => $mimeType,
+            'Content-Disposition' => 'inline; filename="'.basename($path).'"',
             'Cache-Control' => 'private, no-store',
         ]);
     }
@@ -227,6 +301,46 @@ class ProductFileService
         ]);
 
         return self::CLOUDINARY_PREFIX.$asset['public_id'].'.'.$asset['format'];
+    }
+
+    protected function deleteGuideFile(string $path): void
+    {
+        if (! $this->isCloudinaryImage($path)) {
+            Storage::disk(self::DISK)->delete($path);
+
+            return;
+        }
+
+        [$publicId, $format] = $this->cloudinaryImageParts($path);
+        $resourceType = (strtolower($format) === 'pdf' || in_array(strtolower($format), ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'raw';
+
+        $this->cloudinary()->uploadApi()->destroy($publicId, [
+            'resource_type' => $resourceType,
+            'type' => DeliveryType::AUTHENTICATED,
+            'invalidate' => true,
+        ]);
+    }
+
+    protected function uploadGuideFile(string $sourcePath, string $extension): string
+    {
+        $prefix = trim((string) config('filesystems.disks.cloudinary.prefix'), '/');
+        $publicId = trim(implode('/', array_filter([
+            $prefix,
+            self::GUIDE_DIRECTORY,
+            (string) Str::uuid(),
+        ])), '/');
+
+        $format = strtolower($extension ?: 'png');
+        $resourceType = ($format === 'pdf' || in_array($format, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'auto';
+
+        $asset = $this->cloudinary()->uploadApi()->upload($sourcePath, [
+            'public_id' => $publicId,
+            'resource_type' => $resourceType,
+            'type' => DeliveryType::AUTHENTICATED,
+            'overwrite' => false,
+        ]);
+
+        return self::CLOUDINARY_PREFIX.$asset['public_id'].'.'.($asset['format'] ?? $format);
     }
 
     protected function isCloudinaryImage(string $path): bool

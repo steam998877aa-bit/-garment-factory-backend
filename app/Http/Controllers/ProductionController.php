@@ -317,22 +317,13 @@ class ProductionController extends Controller
      * no index it serves the first guide file, which is the only one a product
      * had before guide files became a list.
      */
-    public function guideFile(Request $request, Production $production, ?int $index = null): StreamedResponse
+    public function guideFile(Request $request, Production $production, ?int $index = null): StreamedResponse|\Symfony\Component\HttpFoundation\Response
     {
         $path = ($production->guide_files ?? [])[$index ?? 0] ?? null;
 
         abort_if($path === null, JsonResponse::HTTP_NOT_FOUND, 'This product has no guide file at that position.');
-        $disk = Storage::disk(ProductFileService::DISK);
-        abort_unless($disk->exists($path), JsonResponse::HTTP_NOT_FOUND, 'Guide file is missing.');
 
-        $mimeType = $disk->mimeType($path) ?: 'application/octet-stream';
-
-        return $disk->response(
-            $path,
-            basename($path),
-            ['Content-Type' => $mimeType],
-            'inline',
-        );
+        return $this->files->guideFileResponse($path);
     }
 
     /**

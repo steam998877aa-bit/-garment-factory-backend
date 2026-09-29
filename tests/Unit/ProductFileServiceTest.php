@@ -72,4 +72,36 @@ class ProductFileServiceTest extends TestCase
         $this->assertStringContainsString('private', $cacheControl);
         $this->assertStringContainsString('no-store', $cacheControl);
     }
+
+    public function test_guide_files_are_uploaded_to_cloudinary_when_configured(): void
+    {
+        Config::set('filesystems.disks.cloudinary.url', 'cloudinary://123:secret@demo');
+        $uploadApi = Mockery::mock(UploadApi::class);
+        $uploadApi->shouldReceive('upload')
+            ->once()
+            ->with(Mockery::type('string'), Mockery::on(fn (array $options): bool => $options['resource_type'] === 'image'
+                && $options['type'] === DeliveryType::AUTHENTICATED
+            ))
+            ->andReturn(new ApiResponse([
+                'public_id' => 'products/guides/guide-id',
+                'format' => 'jpg',
+            ], []));
+
+        $cloudinary = Mockery::mock(new Cloudinary([
+            'cloud' => [
+                'cloud_name' => 'demo',
+                'api_key' => '123',
+                'api_secret' => 'secret',
+            ],
+            'url' => ['secure' => true],
+        ]));
+        $cloudinary->shouldReceive('uploadApi')->once()->andReturn($uploadApi);
+        $this->app->instance(Cloudinary::class, $cloudinary);
+
+        $paths = app(ProductFileService::class)->storeGuideFiles([
+            UploadedFile::fake()->create('guide.jpg', 20, 'image/jpeg'),
+        ]);
+
+        $this->assertSame(['cloudinary:products/guides/guide-id.jpg'], $paths);
+    }
 }
