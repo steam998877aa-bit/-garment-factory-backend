@@ -12,11 +12,11 @@ class AuditLogPolicy
      */
     public function viewAny(User $user): bool
     {
-        return $user->hasRole('Admin');
+        return $user->hasRole('Admin', 'HR', 'Production Manager');
     }
 
     public function view(User $user, AuditLog $auditLog): bool
     {
-        return $user->hasRole('Admin');
+        return $user->hasRole('Admin', 'HR', 'Production Manager');
     }
 }

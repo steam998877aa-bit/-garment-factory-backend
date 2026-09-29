@@ -23,7 +23,7 @@ class EmployeeFileService
 {
     public const CLOUDINARY_PREFIX = 'cloudinary:';
 
-    public const DISK = 'local';
+    public const DISK = 'public';
 
     public const ID_CARD_DIRECTORY = 'employees/id-cards';
 
@@ -48,6 +48,8 @@ class EmployeeFileService
             return $this->uploadDocument($file, self::ID_CARD_DIRECTORY);
         }
 
+        Storage::disk(self::DISK)->makeDirectory(self::ID_CARD_DIRECTORY);
+
         return $file->store(self::ID_CARD_DIRECTORY, self::DISK);
     }
 
@@ -61,6 +63,8 @@ class EmployeeFileService
         if ($this->hasCloudinary()) {
             return $this->uploadDocument($file, self::CV_DIRECTORY);
         }
+
+        Storage::disk(self::DISK)->makeDirectory(self::CV_DIRECTORY);
 
         return $file->store(self::CV_DIRECTORY, self::DISK);
     }
@@ -88,20 +92,36 @@ class EmployeeFileService
         $this->deleteCv($employee);
     }
 
-    public function response(?string $path, string $missingMessage): Response
+    public function response(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): Response
     {
         abort_if($path === null, Response::HTTP_NOT_FOUND, $missingMessage);
 
+        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+
         if (! str_starts_with($path, self::CLOUDINARY_PREFIX)) {
             $disk = Storage::disk(self::DISK);
-            abort_unless($disk->exists($path), Response::HTTP_NOT_FOUND, 'The stored file is missing.');
 
-            return $disk->response(
-                $path,
-                basename($path),
-                ['Content-Type' => $disk->mimeType($path) ?: 'application/octet-stream'],
-                'inline',
-            );
+            if (! $disk->exists($path)) {
+                $disk = Storage::disk('local');
+            }
+
+            abort_unless($disk->exists($path), Response::HTTP_NOT_FOUND, 'الملف غير موجود على الخادم (يرجى إعادة إرفاقه من شاشة تعديل الموظف)');
+
+            $mimeType = $disk->mimeType($path);
+            if ($ext === 'pdf' || empty($mimeType) || $mimeType === 'application/octet-stream' || $mimeType === 'binary/octet-stream') {
+                $mimeType = 'application/pdf';
+            }
+
+            $name = $filename ?: basename($path);
+            if ($mimeType === 'application/pdf' && ! str_ends_with(strtolower($name), '.pdf')) {
+                $name .= '.pdf';
+            }
+
+            return response()->file($disk->path($path), [
+                'Content-Type' => $mimeType,
+                'Content-Disposition' => $disposition . '; filename="' . $name . '"',
+                'Cache-Control' => 'private, no-store',
+            ]);
         }
 
         [$publicId, $format] = $this->cloudinaryParts($path);
@@ -124,12 +144,19 @@ class EmployeeFileService
 
         abort_unless($remote->successful(), Response::HTTP_NOT_FOUND, 'The stored file is missing.');
 
-        $mimeType = $remote->header('Content-Type')
-            ?: (strtolower($format) === 'pdf' ? 'application/pdf' : 'image/'.$format);
+        $mimeType = $remote->header('Content-Type');
+        if (strtolower($format) === 'pdf' || $ext === 'pdf' || empty($mimeType) || $mimeType === 'binary/octet-stream' || $mimeType === 'application/octet-stream') {
+            $mimeType = 'application/pdf';
+        }
+
+        $name = $filename ?: basename($path);
+        if ($mimeType === 'application/pdf' && ! str_ends_with(strtolower($name), '.pdf')) {
+            $name .= '.pdf';
+        }
 
         return response($remote->body(), Response::HTTP_OK, [
             'Content-Type' => $mimeType,
-            'Content-Disposition' => 'inline; filename="'.basename($path).'"',
+            'Content-Disposition' => $disposition . '; filename="' . $name . '"',
             'Cache-Control' => 'private, no-store',
         ]);
     }
@@ -165,7 +192,8 @@ class EmployeeFileService
     protected function deleteDocument(string $path): void
     {
         if (! str_starts_with($path, self::CLOUDINARY_PREFIX)) {
-            Storage::disk(self::DISK)->delete($path);
+            Storage::disk('public')->delete($path);
+            Storage::disk('local')->delete($path);
 
             return;
         }

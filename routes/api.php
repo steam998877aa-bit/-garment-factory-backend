@@ -117,6 +117,9 @@ Route::middleware('auth:sanctum')->group(function () {
         // bodies are unevenly supported by HTTP clients and proxies.
         Route::post('/employees/{employee}/delete', [EmployeeController::class, 'destroy'])
             ->name('employees.destroy');
+
+        Route::get('/employees/{employee}/activity', [EmployeeController::class, 'activity'])
+            ->name('employees.activity');
     });
 
     /*
@@ -191,12 +194,16 @@ Route::middleware('auth:sanctum')->group(function () {
 
    /*
 |--------------------------------------------------------------------------
-| Audit trail - Admin only.
+| Audit trail - Admin & HR.
 |--------------------------------------------------------------------------
 */
 Route::get('/audit-logs', [AuditLogController::class, 'index'])
-    ->middleware('role:Admin')
+    ->middleware('role:Admin,HR,Production Manager')
     ->name('audit-logs.index');
+
+Route::get('/audit-logs/employees', [AuditLogController::class, 'employeeChanges'])
+    ->middleware('role:Admin,HR')
+    ->name('audit-logs.employees');
 
 }); // إغلاق مجموعة auth:sanctum
 

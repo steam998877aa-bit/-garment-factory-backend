@@ -128,9 +128,13 @@ class PortalController extends Controller
      */
     public function idCard(Request $request): \Symfony\Component\HttpFoundation\Response
     {
+        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
+
         return $this->streamOwnDocument(
             $this->employee($request)->id_card_image,
-            'You have no ID card on file.'
+            'You have no ID card on file.',
+            $disposition,
+            'document.pdf'
         );
     }
 
@@ -139,9 +143,13 @@ class PortalController extends Controller
      */
     public function cv(Request $request): \Symfony\Component\HttpFoundation\Response
     {
+        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
+
         return $this->streamOwnDocument(
             $this->employee($request)->cv_file,
-            'You have no CV on file.'
+            'You have no CV on file.',
+            $disposition,
+            'document.pdf'
         );
     }
 
@@ -164,8 +172,8 @@ class PortalController extends Controller
     /**
      * Send one of the employee's own documents.
      */
-    protected function streamOwnDocument(?string $path, string $missingMessage): \Symfony\Component\HttpFoundation\Response
+    protected function streamOwnDocument(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): \Symfony\Component\HttpFoundation\Response
     {
-        return $this->files->response($path, $missingMessage);
+        return $this->files->response($path, $missingMessage, $disposition, $filename);
     }
 }

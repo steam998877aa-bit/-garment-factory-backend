@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ConfirmsPassword;
 use App\Http\Resources\EmployeeResource;
+use App\Models\AuditLog;
 use App\Models\Employee;
 use App\Models\Role;
 use App\Models\User;
@@ -267,19 +268,61 @@ class EmployeeController extends Controller
     }
 
     /**
+     * Activity trail for a specific employee: updates, created, deleted, etc.
+     */
+    public function activity(Employee $employee): JsonResponse
+    {
+        $this->authorize('view', $employee);
+
+        $logs = AuditLog::query()
+            ->where(function ($q) use ($employee) {
+                $q->where('details', 'like', '%"employee_id":' . $employee->getKey() . ',%')
+                  ->orWhere('details', 'like', '%"employee_id":' . $employee->getKey() . '}%')
+                  ->orWhere('details', 'like', '%"employee_id": "' . $employee->getKey() . '"%')
+                  ->orWhere('details', 'like', '%"employee_id":' . $employee->getKey() . ' %');
+            })
+            ->latest('id')
+            ->get()
+            ->map(fn (AuditLog $log): array => [
+                'id' => $log->id,
+                'action' => $log->action,
+                'user' => $log->username,
+                'user_id' => $log->user_id,
+                'details' => is_string($log->details) ? (json_decode($log->details, true) ?? $log->details) : $log->details,
+                'at' => $log->created_at?->format('Y-m-d H:i:s'),
+                'created_at' => $log->created_at?->toIso8601String(),
+            ]);
+
+        return response()->json([
+            'status' => true,
+            'message' => "Found {$logs->count()} activity log(s) for this employee.",
+            'employee' => [
+                'id' => $employee->id,
+                'name' => $employee->name,
+                'fingerprint_id' => $employee->fingerprint_id,
+            ],
+            'data' => $logs->all(),
+        ]);
+    }
+
+    /**
      * Stream the employee's ID card to an authorised caller.
      */
-    public function idCard(Employee $employee): \Symfony\Component\HttpFoundation\Response
+    public function idCard(Request $request, Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
-        return $this->streamDocument($employee->id_card_image, 'This employee has no ID card on file.');
+        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
+
+        return $this->streamDocument($employee->id_card_image, 'This employee has no ID card on file.', $disposition, 'document.pdf');
     }
 
     /**
      * Stream the employee's CV to an authorised caller.
      */
-    public function cv(Employee $employee): \Symfony\Component\HttpFoundation\Response
+    public function cv(Request $request, Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
-        return $this->streamDocument($employee->cv_file, 'This employee has no CV on file.');
+        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
+
+        return $this->streamDocument($employee->cv_file, 'This employee has no CV on file.', $disposition, 'document.pdf');
     }
 
     /**
@@ -452,9 +495,9 @@ class EmployeeController extends Controller
     /**
      * Send a stored document, or 404 when it is absent.
      */
-    protected function streamDocument(?string $path, string $missingMessage): \Symfony\Component\HttpFoundation\Response
+    protected function streamDocument(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): \Symfony\Component\HttpFoundation\Response
     {
-        return $this->files->response($path, $missingMessage);
+        return $this->files->response($path, $missingMessage, $disposition, $filename);
     }
     /**
      * @return array<string, mixed>

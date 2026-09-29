@@ -75,6 +75,11 @@ class EmployeeResource extends JsonResource
             return 'application/octet-stream';
         }
 
-        return Storage::disk('local')->mimeType($path) ?: 'application/octet-stream';
+        $disk = Storage::disk('public');
+        if (! $disk->exists($path)) {
+            $disk = Storage::disk('local');
+        }
+
+        return $disk->mimeType($path) ?: 'application/octet-stream';
     }
 }
