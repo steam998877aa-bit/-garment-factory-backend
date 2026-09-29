@@ -23,8 +23,10 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class PortalController extends Controller
 {
-    public function __construct(protected AttendanceStatisticsService $statistics)
-    {
+    public function __construct(
+        protected AttendanceStatisticsService $statistics,
+        protected EmployeeFileService $files,
+    ) {
     }
 
     /**
@@ -124,7 +126,7 @@ class PortalController extends Controller
     /**
      * The employee's own ID card scan.
      */
-    public function idCard(Request $request): StreamedResponse
+    public function idCard(Request $request): \Symfony\Component\HttpFoundation\Response
     {
         return $this->streamOwnDocument(
             $this->employee($request)->id_card_image,
@@ -135,7 +137,7 @@ class PortalController extends Controller
     /**
      * The employee's own CV.
      */
-    public function cv(Request $request): StreamedResponse
+    public function cv(Request $request): \Symfony\Component\HttpFoundation\Response
     {
         return $this->streamOwnDocument(
             $this->employee($request)->cv_file,
@@ -162,17 +164,8 @@ class PortalController extends Controller
     /**
      * Send one of the employee's own documents.
      */
-    protected function streamOwnDocument(?string $path, string $missingMessage): StreamedResponse
+    protected function streamOwnDocument(?string $path, string $missingMessage): \Symfony\Component\HttpFoundation\Response
     {
-        abort_if($path === null, JsonResponse::HTTP_NOT_FOUND, $missingMessage);
-        $disk = Storage::disk(EmployeeFileService::DISK);
-        abort_unless($disk->exists($path), JsonResponse::HTTP_NOT_FOUND, 'The stored file is missing.');
-
-        return $disk->response(
-            $path,
-            basename($path),
-            ['Content-Type' => $disk->mimeType($path) ?: 'application/octet-stream'],
-            'inline'
-        );
+        return $this->files->response($path, $missingMessage);
     }
 }

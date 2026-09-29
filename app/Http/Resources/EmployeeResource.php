@@ -63,6 +63,18 @@ class EmployeeResource extends JsonResource
 
     protected function documentMimeType(string $path): string
     {
+        if (str_starts_with($path, 'cloudinary:')) {
+            $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+            if ($ext === 'pdf') {
+                return 'application/pdf';
+            }
+            if (in_array($ext, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) {
+                return 'image/'.$ext;
+            }
+
+            return 'application/octet-stream';
+        }
+
         return Storage::disk('local')->mimeType($path) ?: 'application/octet-stream';
     }
 }

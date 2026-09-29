@@ -269,7 +269,7 @@ class EmployeeController extends Controller
     /**
      * Stream the employee's ID card to an authorised caller.
      */
-    public function idCard(Employee $employee): StreamedResponse
+    public function idCard(Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
         return $this->streamDocument($employee->id_card_image, 'This employee has no ID card on file.');
     }
@@ -277,7 +277,7 @@ class EmployeeController extends Controller
     /**
      * Stream the employee's CV to an authorised caller.
      */
-    public function cv(Employee $employee): StreamedResponse
+    public function cv(Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
         return $this->streamDocument($employee->cv_file, 'This employee has no CV on file.');
     }
@@ -452,18 +452,9 @@ class EmployeeController extends Controller
     /**
      * Send a stored document, or 404 when it is absent.
      */
-    protected function streamDocument(?string $path, string $missingMessage): StreamedResponse
+    protected function streamDocument(?string $path, string $missingMessage): \Symfony\Component\HttpFoundation\Response
     {
-        abort_if($path === null, JsonResponse::HTTP_NOT_FOUND, $missingMessage);
-        $disk = Storage::disk(EmployeeFileService::DISK);
-        abort_unless($disk->exists($path), JsonResponse::HTTP_NOT_FOUND, 'The stored file is missing.');
-
-        return $disk->response(
-            $path,
-            basename($path),
-            ['Content-Type' => $disk->mimeType($path) ?: 'application/octet-stream'],
-            'inline',
-        );
+        return $this->files->response($path, $missingMessage);
     }
     /**
      * @return array<string, mixed>
