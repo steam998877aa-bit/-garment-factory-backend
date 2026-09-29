@@ -397,6 +397,8 @@ class AttendanceController extends Controller
             'date' => ['sometimes', 'date_format:Y-m-d'],
             'date_from' => ['sometimes', 'date_format:Y-m-d'],
             'date_to' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:date_from'],
+            'year' => ['sometimes', 'integer', 'between:2000,2100'],
+            'month' => ['sometimes', 'integer', 'between:1,12'],
             'unmatched_only' => ['sometimes', 'boolean'],
             'per_page' => ['sometimes', 'integer', 'min:1', 'max:200'],
         ]);
@@ -422,6 +424,14 @@ class AttendanceController extends Controller
             ->when(
                 isset($filters['date_to']),
                 fn ($q) => $q->whereDate('date', '<=', $filters['date_to']),
+            )
+            ->when(
+                isset($filters['year']),
+                fn ($q) => $q->whereYear('date', $filters['year']),
+            )
+            ->when(
+                isset($filters['month']),
+                fn ($q) => $q->whereMonth('date', $filters['month']),
             )
             ->when(
                 $request->boolean('unmatched_only'),
