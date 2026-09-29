@@ -24,6 +24,18 @@ class AuditLog extends Model
     ];
 
     /**
+     * Get the attributes that should be cast.
+     *
+     * @return array<string, string>
+     */
+    protected function casts(): array
+    {
+        return [
+            'details' => 'array',
+        ];
+    }
+
+    /**
      * The user who performed the action.
      *
      * @return BelongsTo<User, $this>

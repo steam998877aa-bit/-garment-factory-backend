@@ -25,7 +25,7 @@ class EmployeeFileService
 
     public const DISK = 'public';
 
-    public const ID_CARD_DIRECTORY = 'employees/id-cards';
+    public const ID_CARD_DIRECTORY = 'employees/id_cards';
 
     public const CV_DIRECTORY = 'employees/cvs';
 
@@ -48,7 +48,8 @@ class EmployeeFileService
             return $this->uploadDocument($file, self::ID_CARD_DIRECTORY);
         }
 
-        Storage::disk(self::DISK)->makeDirectory(self::ID_CARD_DIRECTORY);
+        Storage::disk(self::DISK)->makeDirectory('employees/id_cards');
+        Storage::disk(self::DISK)->makeDirectory('employees/id-cards');
 
         return $file->store(self::ID_CARD_DIRECTORY, self::DISK);
     }
@@ -94,30 +95,72 @@ class EmployeeFileService
 
     public function response(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): Response
     {
-        abort_if($path === null, Response::HTTP_NOT_FOUND, $missingMessage);
-
-        $ext = strtolower(pathinfo($path, PATHINFO_EXTENSION));
+        abort_if(empty($path), Response::HTTP_NOT_FOUND, $missingMessage);
 
         if (! str_starts_with($path, self::CLOUDINARY_PREFIX)) {
             $disk = Storage::disk(self::DISK);
 
-            if (! $disk->exists($path)) {
-                $disk = Storage::disk('local');
+            $cleanPath = ltrim($path, '/');
+            if (str_starts_with($cleanPath, 'storage/')) {
+                $cleanPath = substr($cleanPath, 8);
+            }
+            if (str_starts_with($cleanPath, 'public/')) {
+                $cleanPath = substr($cleanPath, 7);
             }
 
-            abort_unless($disk->exists($path), Response::HTTP_NOT_FOUND, 'الملف غير موجود على الخادم (يرجى إعادة إرفاقه من شاشة تعديل الموظف)');
+            $foundPath = null;
+            $foundDisk = $disk;
 
-            $mimeType = $disk->mimeType($path);
+            $candidates = array_unique(array_filter([
+                $cleanPath,
+                $path,
+                str_replace('id-cards', 'id_cards', $cleanPath),
+                str_replace('id_cards', 'id-cards', $cleanPath),
+                'employees/id_cards/' . basename($path),
+                'employees/id-cards/' . basename($path),
+                'employees/cvs/' . basename($path),
+            ]));
+
+            foreach ($candidates as $candidate) {
+                if ($disk->exists($candidate)) {
+                    $foundPath = $candidate;
+                    $foundDisk = $disk;
+                    break;
+                }
+                if (Storage::disk('local')->exists($candidate)) {
+                    $foundPath = $candidate;
+                    $foundDisk = Storage::disk('local');
+                    break;
+                }
+            }
+
+            abort_unless($foundPath !== null, Response::HTTP_NOT_FOUND, 'الملف غير موجود على الخادم (يرجى إعادة إرفاقه)');
+
+            $mimeType = $foundDisk->mimeType($foundPath);
+            $ext = strtolower(pathinfo($foundPath, PATHINFO_EXTENSION));
             if ($ext === 'pdf' || empty($mimeType) || $mimeType === 'application/octet-stream' || $mimeType === 'binary/octet-stream') {
                 $mimeType = 'application/pdf';
             }
 
-            $name = $filename ?: basename($path);
+            $name = $filename ?: basename($foundPath);
             if ($mimeType === 'application/pdf' && ! str_ends_with(strtolower($name), '.pdf')) {
                 $name .= '.pdf';
             }
 
-            return response()->file($disk->path($path), [
+            if (method_exists($foundDisk, 'path')) {
+                $fullPath = $foundDisk->path($foundPath);
+                if (file_exists($fullPath)) {
+                    return response()->file($fullPath, [
+                        'Content-Type' => $mimeType,
+                        'Content-Disposition' => $disposition . '; filename="' . $name . '"',
+                        'Cache-Control' => 'private, no-store',
+                    ]);
+                }
+            }
+
+            return response()->streamDownload(function () use ($foundDisk, $foundPath) {
+                echo $foundDisk->get($foundPath);
+            }, $name, [
                 'Content-Type' => $mimeType,
                 'Content-Disposition' => $disposition . '; filename="' . $name . '"',
                 'Cache-Control' => 'private, no-store',
