@@ -4,338 +4,107 @@ namespace App\Services;
 
 use App\Models\Attendance;
 use App\Models\Employee;
-use Illuminate\Support\Carbon;
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use PhpOffice\PhpSpreadsheet\IOFactory;
 use PhpOffice\PhpSpreadsheet\Shared\Date as ExcelDate;
-use RuntimeException;
 use Throwable;
 
 class BiometricAttendanceImportService
 {
     /**
-     * Import attendance records from a biometric export file (Excel/CSV).
-     *
-     * Rules:
-     * 1. Character encoding conversion (UTF-8, GBK, Windows-1256, etc.).
-     * 2. Index-based column reading (Col A/B/C for Fingerprint ID, Col D/E for Date & Time, Col G for Punch Type).
-     * 3. Deduplication:
-     *    - Check-in: Earliest punch between 07:00 AM and 10:00 AM.
-     *    - Check-out: Latest punch between 04:00 PM (16:00) and 07:00 PM (19:00).
-     * 4. Automatic Absence generation: Registered employees with no check-in punch on import dates are marked 'absent'.
+     * معالجة واستيراد ملف البصمة.
      */
-    public function import(string $path, bool $dryRun = false): array
+    public function import(string $filePath): array
     {
-        if (!file_exists($path) || !is_readable($path)) {
-            throw new RuntimeException("ملف البصمات غير موجود أو لا يمكن قراءته.");
-        }
+        $rows = $this->readGrid($filePath);
 
-        $grid = $this->readGrid($path);
-        if (empty($grid)) {
-            throw new RuntimeException("ملف البصمات فارغ أو تعذرت قراءته.");
-        }
-
-        $totalGridRows = 0;
-        $punchesByEmpAndDate = [];
-        $unmatched = [];
-        $importedDates = [];
-
-        $employeesMap = Employee::query()
-            ->whereNotNull('fingerprint_id')
-            ->get()
-            ->keyBy(fn ($emp) => (string) $emp->fingerprint_id);
-
-        // Loop through all data rows
-        foreach ($grid as $rowIndex => $cells) {
-            if (!is_array($cells)) {
-                continue;
-            }
-
-            // Skip completely empty rows
-            $hasContent = false;
-            foreach ($cells as $cellVal) {
-                if ($cellVal !== null && trim((string)$cellVal) !== '') {
-                    $hasContent = true;
-                    break;
-                }
-            }
-            if (!$hasContent) {
-                continue;
-            }
-
-            $totalGridRows++;
-
-            $getVal = function (array $keys) use ($cells): string {
-                foreach ($keys as $k) {
-                    if (isset($cells[$k]) && $cells[$k] !== null) {
-                        $str = $this->sanitizeEncoding($cells[$k]);
-                        if ($str !== '') {
-                            return $str;
-                        }
-                    }
-                }
-                return '';
-            };
-
-            $valA = $getVal(['A', 1, 0]);
-            $valB = $getVal(['B', 2, 1]);
-            $valC = $getVal(['C', 3, 2]);
-            $valD = $getVal(['D', 4, 3]);
-            $valE = $getVal(['E', 5, 4]);
-            $valF = $getVal(['F', 6, 5]);
-            $valG = $getVal(['G', 7, 6]);
-            $valH = $getVal(['H', 8, 7]);
-
-            // Determine Fingerprint ID
-            $fingerprintId = $this->extractFingerprintId($valC, $valA, $valB);
-
-            if ($fingerprintId === null) {
-                continue; // Skip header or non-numeric title rows
-            }
-
-            // Check if format is Summary Format (Check-in in Col C, Check-out in Col D)
-            $isSummaryFormat = $this->isTimeString($valC) && $this->isTimeString($valD) && $this->normaliseDate($valB) !== null;
-
-            if ($isSummaryFormat) {
-                $date = $this->normaliseDate($valB);
-                $checkIn = $this->normaliseTime($valC);
-                $checkOut = $this->normaliseTime($valD);
-
-                if ($date) {
-                    $importedDates[$date] = true;
-                    $punchesByEmpAndDate[$fingerprintId][$date]['summary'] = [
-                        'check_in' => $checkIn,
-                        'check_out' => $checkOut,
-                        'notes' => $valH ?: ($valE ?: null),
-                    ];
-                }
-                continue;
-            }
-
-            // Otherwise: Punch Log Format (1 row per punch)
-            $dt = $this->parseDateTime(!empty($valE) ? $valE : $valD);
-
-            if ($dt === null) {
-                $datePart = $this->normaliseDate($valD ?: $valB);
-                $timePart = !empty($valE) ? $valE : (!empty($valC) && $this->isTimeString($valC) ? $valC : '');
-                if ($datePart && !empty($timePart)) {
-                    $dt = $this->parseDateTime($datePart . ' ' . $timePart);
-                }
-            }
-
-            if ($dt === null) {
-                continue;
-            }
-
-            $date = $dt->toDateString();
-            $time = $dt->toTimeString();
-            $importedDates[$date] = true;
-
-            // Determine punch direction (In / Out) from Column G or F
-            $type = strtolower(!empty($valG) ? $valG : $valF);
-            $direction = 'unknown';
-
-            if ($type === 'i' || $type === 'in' || $type === '1' || mb_strpos($type, 'حضور') !== false) {
-                $direction = 'in';
-            } elseif ($type === 'o' || $type === 'out' || $type === '0' || mb_strpos($type, 'خروج') !== false) {
-                $direction = 'out';
-            } else {
-                $direction = $dt->hour < 12 ? 'in' : 'out';
-            }
-
-            $punchesByEmpAndDate[$fingerprintId][$date]['punches'][] = [
-                'time' => $time,
-                'datetime' => $dt,
-                'direction' => $direction,
-                'notes' => $valH,
+        if (empty($rows)) {
+            return [
+                'success' => false,
+                'message' => 'الملف فارغ أو يتعذر قراءته.',
+                'imported_count' => 0,
             ];
         }
 
-        $rows = [];
+        $importedCount = 0;
+        $errors = [];
 
-        // Process punches per employee per day
-        foreach ($punchesByEmpAndDate as $fingerprintId => $dates) {
-            $employee = $employeesMap[(string) $fingerprintId] ?? null;
-
-            if ($employee === null && !in_array((string) $fingerprintId, $unmatched, true)) {
-                $unmatched[] = (string) $fingerprintId;
-            }
-
-            foreach ($dates as $date => $data) {
-                if (isset($data['summary'])) {
-                    $checkIn = $data['summary']['check_in'];
-                    $checkOut = $data['summary']['check_out'];
-                    $notes = $data['summary']['notes'];
-                } else {
-                    $punches = $data['punches'] ?? [];
-                    [$checkIn, $checkOut, $notes] = $this->processDayPunches($punches);
+        DB::beginTransaction();
+        try {
+            foreach ($rows as $index => $row) {
+                // تجاوز السطر الأول إذا كان يحتوي على عناوين الأعمدة
+                if ($index === 0 && isset($row[0]) && !is_numeric($row[0])) {
+                    continue;
                 }
 
-                $status = $this->determineStatus($checkIn, $notes);
+                $fingerprintId = $this->sanitizeEncoding($row[0] ?? null);
+                $rawDate       = $row[1] ?? null;
+                $checkInRaw    = $row[2] ?? null;
+                $checkOutRaw   = $row[3] ?? null;
+                $note          = $this->sanitizeEncoding($row[4] ?? null);
+
+                if (empty($fingerprintId)) {
+                    continue;
+                }
+
+                $date = $this->normaliseDate($rawDate);
+                if (!$date) {
+                    $errors[] = "السطر " . ($index + 1) . ": تاريخ غير صالح.";
+                    continue;
+                }
+
+                $checkIn  = $this->normaliseTime($checkInRaw);
+                $checkOut = $this->normaliseTime($checkOutRaw);
+
+                // البحث عن الموظف باستخدام كود البصمة
+                $employee = Employee::where('fingerprint_id', $fingerprintId)->first();
+
+                $status       = $this->determineStatus($checkIn, $note);
                 $workingHours = $this->calculateHours($checkIn, $checkOut);
 
-                $rows[(string) $fingerprintId . '|' . $date] = [
-                    'employee_id' => $employee?->id,
-                    'fingerprint_id' => (string) $fingerprintId,
-                    'date' => $date,
-                    'check_in' => $checkIn,
-                    'check_out' => $checkOut,
-                    'working_hours' => $workingHours,
-                    'status' => $status,
-                    'notes' => $notes,
-                    'created_at' => now(),
-                    'updated_at' => now(),
-                ];
-            }
-        }
-
-        // Automatic Absence Generation:
-        // For each imported date, active employees with no check-in punch are marked as 'absent'
-        $allActiveEmployees = Employee::query()
-            ->whereNotNull('fingerprint_id')
-            ->where(function ($q) {
-                $q->whereNull('status')->orWhere('status', 'active');
-            })
-            ->get();
-
-        foreach (array_keys($importedDates) as $date) {
-            foreach ($allActiveEmployees as $emp) {
-                $fId = (string) $emp->fingerprint_id;
-                $key = $fId . '|' . $date;
-
-                if (!isset($rows[$key])) {
-                    $rows[$key] = [
-                        'employee_id' => $emp->id,
-                        'fingerprint_id' => $fId,
-                        'date' => $date,
-                        'check_in' => null,
-                        'check_out' => null,
-                        'working_hours' => 0,
-                        'status' => Attendance::STATUS_ABSENT,
-                        'notes' => 'غائب - لم تسجل بصمة',
-                        'created_at' => now(),
-                        'updated_at' => now(),
-                    ];
-                } elseif ($rows[$key]['check_in'] === null && $rows[$key]['status'] === Attendance::STATUS_PRESENT) {
-                    $rows[$key]['status'] = Attendance::STATUS_ABSENT;
-                    $rows[$key]['working_hours'] = 0;
-                }
-            }
-        }
-
-        $finalRows = array_values($rows);
-        $matchedCount = count(array_filter($finalRows, fn($r) => $r['employee_id'] !== null));
-
-        if (!$dryRun && !empty($finalRows)) {
-            foreach (array_chunk($finalRows, 500) as $chunk) {
-                Attendance::upsert(
-                    $chunk,
-                    ['fingerprint_id', 'date'],
-                    ['employee_id', 'check_in', 'check_out', 'working_hours', 'status', 'notes', 'updated_at']
+                Attendance::updateOrCreate(
+                    [
+                        'fingerprint_id' => $fingerprintId,
+                        'date'           => $date,
+                    ],
+                    [
+                        'employee_id'   => $employee?->id,
+                        'check_in'       => $checkIn,
+                        'check_out'      => $checkOut,
+                        'working_hours'  => $workingHours,
+                        'status'         => $status,
+                        'notes'          => $note,
+                    ]
                 );
-            }
-        }
 
-        return [
-            'file' => basename($path),
-            'dry_run' => $dryRun,
-            'total_rows' => $totalGridRows,
-            'total' => $totalGridRows,
-            'parsed' => count($finalRows),
-            'imported' => $dryRun ? 0 : count($finalRows),
-            'created' => count($finalRows),
-            'updated' => 0,
-            'matched' => $matchedCount,
-            'unmatched' => count($unmatched),
-            'failed' => 0,
-            'unmatched_fingerprints' => array_values($unmatched),
-            'dates_imported' => array_keys($importedDates),
-        ];
+                $importedCount++;
+            }
+
+            DB::commit();
+
+            return [
+                'success'        => true,
+                'message'        => "تم استيراد {$importedCount} سجل بنجاح.",
+                'imported_count' => $importedCount,
+                'errors'         => $errors,
+            ];
+        } catch (Throwable $e) {
+            DB::rollBack();
+            Log::error('Biometric Import Error: ' . $e->getMessage());
+
+            return [
+                'success' => false,
+                'message' => 'حدث خطأ أثناء الاستيراد: ' . $e->getMessage(),
+                'imported_count' => 0,
+            ];
+        }
     }
 
     /**
-     * Extract clean fingerprint ID from potential candidate values.
+     * تنظيف ترميز النصوص وتحويلها إلى UTF-8.
      */
-    protected function extractFingerprintId(string ...$candidates): ?string
-    {
-        foreach ($candidates as $val) {
-            $cleaned = trim($val);
-            if ($cleaned === '') {
-                continue;
-            }
-
-            // Remove float trailing decimals like '101.0'
-            if (preg_match('/^(\d+)\.0+$/', $cleaned, $m)) {
-                $cleaned = $m[1];
-            }
-
-            if (ctype_digit($cleaned)) {
-                return (string) (int) $cleaned;
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Process punches for a single employee on a given day:
-     * - Check-in: First punch between 07:00 AM and 10:00 AM.
-     * - Check-out: Last punch between 04:00 PM (16:00) and 07:00 PM (19:00).
-     */
-    protected function processDayPunches(array $punches): array
-    {
-        $checkIn = null;
-        $checkOut = null;
-        $notesList = [];
-
-        usort($punches, fn($a, $b) => $a['datetime'] <=> $b['datetime']);
-
-        // Check-In between 07:00 AM and 10:00 AM
-        foreach ($punches as $p) {
-            $timeStr = $p['time'];
-            if ($timeStr >= '07:00:00' && $timeStr <= '10:00:00') {
-                $checkIn = $timeStr;
-                if (!empty($p['notes'])) $notesList[] = $p['notes'];
-                break;
-            }
-        }
-
-        // Fallback Check-In: Earliest 'in' punch before 12:00 if no punch strictly in 07:00-10:00
-        if ($checkIn === null) {
-            foreach ($punches as $p) {
-                if ($p['time'] < '12:00:00' && $p['direction'] === 'in') {
-                    $checkIn = $p['time'];
-                    if (!empty($p['notes'])) $notesList[] = $p['notes'];
-                    break;
-                }
-            }
-        }
-
-        // Check-Out between 16:00 (04:00 PM) and 19:00 (07:00 PM)
-        foreach (array_reverse($punches) as $p) {
-            $timeStr = $p['time'];
-            if ($timeStr >= '16:00:00' && $timeStr <= '19:00:00') {
-                $checkOut = $timeStr;
-                if (!empty($p['notes'])) $notesList[] = $p['notes'];
-                break;
-            }
-        }
-
-        // Fallback Check-Out: Latest 'out' punch after 12:00 if no punch in 16:00-19:00
-        if ($checkOut === null) {
-            foreach (array_reverse($punches) as $p) {
-                if ($p['time'] >= '12:00:00' && $p['direction'] === 'out') {
-                    $checkOut = $p['time'];
-                    if (!empty($p['notes'])) $notesList[] = $p['notes'];
-                    break;
-                }
-            }
-        }
-
-        $note = implode(', ', array_unique(array_filter($notesList))) ?: null;
-
-        return [$checkIn, $checkOut, $note];
-    }
-
     protected function sanitizeEncoding(mixed $value): string
     {
         if ($value === null) {
@@ -345,17 +114,23 @@ class BiometricAttendanceImportService
         $str = (string) $value;
 
         if (!mb_check_encoding($str, 'UTF-8')) {
-            $str = @mb_convert_encoding($str, 'UTF-8', ['GBK', 'GB2312', 'CP936', 'Windows-1256', 'ISO-8859-1']);
+            $str = mb_convert_encoding($str, 'UTF-8', ['GBK', 'GB2312', 'CP936', 'Windows-1256', 'ISO-8859-1']);
         }
 
         return trim($str);
     }
 
+    /**
+     * التحقق مما إذا كانت القيمة نص وقت.
+     */
     protected function isTimeString(string $value): bool
     {
         return preg_match('/^\d{1,2}:\d{2}(?::\d{2})?$/', trim($value)) === 1;
     }
 
+    /**
+     * قراءة جداول البيانات من ملف الاكسيل/CSV.
+     */
     protected function readGrid(string $path): array
     {
         $spreadsheet = null;
@@ -394,14 +169,19 @@ class BiometricAttendanceImportService
         return [];
     }
 
+    /**
+     * توحيد صيغة التاريخ وتحويله إلى Y-m-d.
+     */
     protected function normaliseDate(mixed $value): ?string
     {
         if (empty($value)) return null;
+
         if (is_numeric($value) && (float)$value > 40000) {
             try {
                 return Carbon::instance(ExcelDate::excelToDateTimeObject((float) $value))->toDateString();
             } catch (Throwable) {}
         }
+
         try {
             $dt = $this->parseDateTime($value);
             return $dt?->toDateString();
@@ -410,6 +190,9 @@ class BiometricAttendanceImportService
         return null;
     }
 
+    /**
+     * تحليل النصوص وتحويلها إلى كائن Carbon.
+     */
     protected function parseDateTime(mixed $value): ?Carbon
     {
         if (empty($value)) return null;
@@ -423,10 +206,13 @@ class BiometricAttendanceImportService
         $str = $this->sanitizeEncoding($value);
         if (empty($str)) return null;
 
-        $str = str_replace(['ص', 'م'], ['AM', 'PM'], $str);
+        // تحويل رموز الوقت العربية إلى الإنجليزية لدعم Carbon
+        $str = str_replace(['ص', 'صباحا', 'صباحاً'], 'AM', $str);
+        $str = str_replace(['م', 'مساء', 'مساءً'], 'PM', $str);
+        $str = str_replace('/', '-', $str);
 
         try {
-            if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?))?/i', $str, $matches)) {
+            if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(.*))?$/i', $str, $matches)) {
                 $p1 = (int) $matches[1];
                 $p2 = (int) $matches[2];
                 $year = (int) $matches[3];
@@ -457,39 +243,68 @@ class BiometricAttendanceImportService
         }
     }
 
+    /**
+     * توحيد صيغة الوقت وتحويله إلى H:i:s.
+     */
     protected function normaliseTime(mixed $value): ?string
     {
         if (empty($value)) return null;
+
         if (is_numeric($value)) {
             $seconds = (int) round(((float)$value - floor((float)$value)) * 86400);
             return sprintf('%02d:%02d:%02d', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60);
         }
+
         try {
             return Carbon::parse((string)$value)->format('H:i:s');
-        } catch (Throwable) {}
-
-        return null;
+        } catch (Throwable) {
+            return null;
+        }
     }
 
+    /**
+     * حساب عدد ساعات العمل بناءً على بصمتي الدخول والخروج.
+     * في حال وجود بصمة دخول بدون خروج يتم احتساب 8 ساعات افتراضية.
+     */
     protected function calculateHours(?string $in, ?string $out): ?float
     {
-        if (!$in || !$out) return null;
-        $cIn = Carbon::parse($in);
+        // 1. وجود دخول بدون خروج -> احتساب 8 ساعات عمل افتراضية
+        if ($in !== null && $out === null) {
+            return 8.0;
+        }
+
+        // 2. غياب بصمة الدخول بالكامل
+        if ($in === null) {
+            return null;
+        }
+
+        // 3. وجود بصمتي الدخول والخروج معاً -> حساب الساعات الفعلية
+        $cIn  = Carbon::parse($in);
         $cOut = Carbon::parse($out);
-        if ($cOut->lt($cIn)) $cOut->addDay();
+
+        // التعامل مع الشفتات الليلية (إذا كان وقت الخروج أصغر من الدخول)
+        if ($cOut->lt($cIn)) {
+            $cOut->addDay();
+        }
+
         return round($cIn->diffInMinutes($cOut) / 60, 2);
     }
 
-    protected function determineStatus(?string $checkIn, ?string $note): string
+    /**
+     * تحديد حالة الحضور بناءً على البصمة والملاحظات المرفقة.
+     */
+    protected function determineStatus(?string $checkin, ?string $note): string
     {
         if ($note) {
-            if (mb_strpos($note, 'اجازة') !== false || mb_strpos($note, 'إجازة') !== false) {
+            if (mb_strpos($note, 'إجازة') !== false || mb_strpos($note, 'اجازة') !== false) {
                 return Attendance::STATUS_LEAVE;
             }
             if (mb_strpos($note, 'عطلة') !== false) {
                 return Attendance::STATUS_HOLIDAY;
             }
         }
-        return $checkIn !== null ? Attendance::STATUS_PRESENT : Attendance::STATUS_ABSENT;
+
+        // إرجاع "حاضر" في حال وجود بصمة دخول (سواء وُجد خروج أم لا)، و"غائب" في حال عدم وجودها
+        return $checkin !== null ? Attendance::STATUS_PRESENT : Attendance::STATUS_ABSENT;
     }
 }

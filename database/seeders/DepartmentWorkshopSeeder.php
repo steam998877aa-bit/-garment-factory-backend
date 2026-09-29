@@ -34,7 +34,7 @@ class DepartmentWorkshopSeeder extends Seeder
         ['name' => 'كوي',        'aliases' => ['الكوي', 'كوى'],                       'position' => 54],
         ['name' => 'تجهيز',      'aliases' => ['التجهيز'],                            'position' => 56],
         ['name' => 'تنضيف و فحص', 'aliases' => ['تنظيف وفحص', 'تنظيف و فحص', 'تنضيف وفحص'], 'position' => 58],
-        ['name' => 'امبلاج',     'aliases' => ['أمبلاج', 'إمبلاج', 'التغليف', 'امبلاچ'], 'position' => 60],
+        ['name' => 'امبلاج',     'aliases' => ['أمبلاج', 'إمبلاج', 'التغليف', 'امبلاچ', 'امبلااج'], 'position' => 60],
         ['name' => 'جاهز تسليم', 'aliases' => ['جاهز التسليم'],                       'position' => 70],
         ['name' => 'البيزك',     'aliases' => ['بيزك', 'الببزك', 'Basic', 'basic'],  'position' => 75],
         ['name' => 'مسلم',       'aliases' => [],                                     'position' => 80],

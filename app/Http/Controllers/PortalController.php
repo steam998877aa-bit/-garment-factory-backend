@@ -17,7 +17,7 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  * Employee self-service.
  *
  * Every endpoint here is read-only and scoped to the employee record linked to
- * the authenticated account. No endpoint accepts an employee id — the subject
+ * the authenticated account. No endpoint accepts an employee id - the subject
  * is always derived from the token, so there is no parameter to tamper with
  * and no way to read a colleague's record.
  */
@@ -34,15 +34,23 @@ class PortalController extends Controller
     {
         $employee = $this->employee($request);
 
-        $year = (int) now()->year;
-        $month = (int) now()->month;
+        $year = (int) $request->input('year', now()->year);
+        $month = (int) $request->input('month', now()->month);
+
+        $stats = $this->statistics->statisticsFor($employee, $year, $month);
 
         return response()->json([
             'status' => true,
             'message' => "Portal summary for {$employee->name}.",
             'profile' => new PortalProfileResource($employee),
             'vacation_balance' => (float) $employee->vacation_balance,
-            'current_month' => $this->statistics->statisticsFor($employee, $year, $month),
+            'current_month' => $stats,
+            'totals' => [
+                'present_days'  => $stats['present_days'] ?? 0,
+                'absent_days'   => $stats['absent_days'] ?? 0,
+                'working_hours' => round((float) ($stats['working_hours'] ?? 0), 2),
+                'average_hours' => round((float) ($stats['average_hours_per_present_day'] ?? 0), 2),
+            ],
         ]);
     }
 
@@ -69,11 +77,17 @@ class PortalController extends Controller
 
         $filters = $request->validate([
             'date_from' => ['sometimes', 'date_format:Y-m-d'],
-            'date_to' => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:date_from'],
-            'year' => ['sometimes', 'integer', 'between:2000,2100'],
-            'month' => ['sometimes', 'integer', 'between:1,12'],
-            'per_page' => ['sometimes', 'integer', 'min:1', 'max:200'],
+            'date_to'   => ['sometimes', 'date_format:Y-m-d', 'after_or_equal:date_from'],
+            'year'      => ['sometimes', 'integer', 'between:2000,2100'],
+            'month'     => ['sometimes', 'integer', 'between:1,12'],
+            'per_page'  => ['sometimes', 'integer', 'min:1', 'max:200'],
         ]);
+
+        $year  = (int) ($filters['year'] ?? now()->year);
+        $month = (int) ($filters['month'] ?? now()->month);
+
+        // حساب الإحصائيات الشاملة باستخدام AttendanceStatisticsService
+        $stats = $this->statistics->statisticsFor($employee, $year, $month);
 
         $query = Attendance::query()
             ->where('employee_id', $employee->getKey())
@@ -83,27 +97,26 @@ class PortalController extends Controller
             ->when(isset($filters['month']), fn ($q) => $q->whereMonth('date', $filters['month']))
             ->orderByDesc('date');
 
-        $totals = (clone $query)
-            ->reorder()
-            ->selectRaw('count(*) as days, coalesce(sum(working_hours), 0) as hours')
-            ->first();
-
         $records = $query->paginate($filters['per_page'] ?? 31)->withQueryString();
 
         return response()->json([
-            'status' => true,
+            'status'  => true,
             'message' => "Found {$records->total()} attendance day(s).",
             'filters' => $filters,
-            'totals' => [
-                'days' => (int) ($totals->days ?? 0),
-                'working_hours' => round((float) ($totals->hours ?? 0), 2),
+            'totals'  => [
+                'present_days'  => $stats['present_days'] ?? 0,
+                'absent_days'   => $stats['absent_days'] ?? 0,
+                'days'          => $stats['present_days'] ?? 0,
+                'working_hours' => round((float) ($stats['working_hours'] ?? 0), 2),
+                'average_hours' => round((float) ($stats['average_hours_per_present_day'] ?? 0), 2),
             ],
-            'data' => AttendanceResource::collection($records->items()),
-            'meta' => [
+            'statistics' => $stats,
+            'data'  => AttendanceResource::collection($records->items()),
+            'meta'  => [
                 'current_page' => $records->currentPage(),
-                'last_page' => $records->lastPage(),
-                'per_page' => $records->perPage(),
-                'total' => $records->total(),
+                'last_page'    => $records->lastPage(),
+                'per_page'     => $records->perPage(),
+                'total'        => $records->total(),
             ],
         ]);
     }
@@ -115,7 +128,7 @@ class PortalController extends Controller
     {
         return $this->streamOwnDocument(
             $this->employee($request)->id_card_image,
-            'You have no ID card on file.',
+            'You have no ID card on file.'
         );
     }
 
@@ -126,16 +139,12 @@ class PortalController extends Controller
     {
         return $this->streamOwnDocument(
             $this->employee($request)->cv_file,
-            'You have no CV on file.',
+            'You have no CV on file.'
         );
     }
 
     /**
      * Resolve the staff record behind the authenticated account.
-     *
-     * An Admin or HR login with no linked employee record has nothing to show
-     * here, which is a 403 rather than an error: the account is valid, it just
-     * is not an employee.
      */
     protected function employee(Request $request): Employee
     {
@@ -144,7 +153,7 @@ class PortalController extends Controller
         abort_if(
             $employee === null,
             JsonResponse::HTTP_FORBIDDEN,
-            'This account is not linked to an employee record.',
+            'This account is not linked to an employee record.'
         );
 
         return $employee;
@@ -163,7 +172,7 @@ class PortalController extends Controller
             $path,
             basename($path),
             ['Content-Type' => $disk->mimeType($path) ?: 'application/octet-stream'],
-            'inline',
+            'inline'
         );
     }
 }
