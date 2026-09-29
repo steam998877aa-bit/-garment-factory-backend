@@ -30,7 +30,23 @@ class NameNormalizer
      */
     public function department(?string $input): ?string
     {
-        return $this->resolve('departments', $input);
+        if ($input === null || trim($input) === '') {
+            return null;
+        }
+
+        $direct = $this->resolve('departments', $input);
+
+        if ($direct !== null) {
+            return $direct;
+        }
+
+        $parsed = $this->parseComposite($input);
+
+        if ($parsed['department'] !== null) {
+            return $parsed['department'];
+        }
+
+        return null;
     }
 
     /**
@@ -39,6 +55,103 @@ class NameNormalizer
     public function workshop(?string $input): ?string
     {
         return $this->resolve('workshops', $input);
+    }
+
+    /**
+     * Resolve a composite input like "خياطة <مصطفى>" or "بيزك - خياطة <صالح>"
+     * into its constituent department, workshop, and product line.
+     *
+     * @return array{department: ?string, workshop: ?string, product_line: ?string}
+     */
+    public function parseComposite(?string $input): array
+    {
+        if ($input === null || trim($input) === '') {
+            return ['department' => null, 'workshop' => null, 'product_line' => null];
+        }
+
+        $input = html_entity_decode(trim($input), ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
+        $input = strtr($input, [
+            '‹' => '<', '›' => '>',
+            '«' => '<', '»' => '>',
+            '＜' => '<', '＞' => '>',
+            '⟨' => '<', '⟩' => '>',
+            '[' => '(', ']' => ')',
+            '{' => '(', '}' => ')',
+        ]);
+
+        $line = null;
+        $workshop = null;
+        $department = null;
+        $rest = $input;
+
+        // 1. Extract workshop from brackets: <workshop> or (workshop)
+        if (preg_match('/^(.*?)\s*(?:\(([^)]+)\)|<([^>]+)>)\s*$/u', $rest, $matches) === 1) {
+            $workshopCandidate = trim(($matches[2] ?? '') !== '' ? $matches[2] : ($matches[3] ?? ''));
+            $workshopResolved = $this->resolve('workshops', $workshopCandidate);
+            $workshop = $workshopResolved ?? ($workshopCandidate !== '' ? $workshopCandidate : null);
+            $rest = trim($matches[1], " \t\n\r\0\x0B-–—:/,;");
+        }
+
+        // 2. Dash separation: "Left - Right"
+        if ($rest !== '' && preg_match('/^(.+?)\s*[-–—]\s*(.+)$/u', $rest, $matches) === 1) {
+            $left = trim($matches[1], " \t\n\r\0\x0B-–—:/,;");
+            $right = trim($matches[2], " \t\n\r\0\x0B-–—:/,;");
+
+            $leftDept = $this->resolve('departments', $left);
+            $rightDept = $this->resolve('departments', $right);
+            $rightWorkshop = $this->resolve('workshops', $right);
+
+            if ($leftDept !== null && $rightWorkshop !== null) {
+                // e.g. "خياطة - مصطفى" -> dept = "خياطة", workshop = "مصطفى"
+                $department = $leftDept;
+                $workshop = $workshop ?? $rightWorkshop;
+                $rest = '';
+            } elseif ($leftDept !== null && $rightDept !== null) {
+                // e.g. "بيزك - خياطة" -> line = "البيزك", dept = "خياطة"
+                $line = $leftDept;
+                $department = $rightDept;
+                $rest = '';
+            } elseif ($leftDept !== null) {
+                $department = $leftDept;
+                $workshop = $workshop ?? ($this->resolve('workshops', $right) ?? ($right !== '' ? $right : null));
+                $rest = '';
+            } elseif ($rightDept !== null) {
+                $department = $rightDept;
+                $rest = '';
+            }
+        }
+
+        // 3. Direct department match on remaining rest
+        if ($department === null && $rest !== '') {
+            $department = $this->resolve('departments', $rest);
+        }
+
+        // 4. Prefix/Suffix matching if department is still null
+        if ($department === null && $rest !== '') {
+            foreach ($this->departmentNames() as $deptName) {
+                $foldedDept = $this->fold($deptName);
+                $foldedRest = $this->fold($rest);
+
+                if ($foldedDept !== '' && str_starts_with($foldedRest, $foldedDept)) {
+                    $remainder = trim(mb_substr($rest, mb_strlen($deptName)), " \t\n\r\0\x0B-–—:/,;");
+                    $resolvedWorkshop = $this->resolve('workshops', $remainder);
+
+                    if ($resolvedWorkshop !== null || $remainder !== '') {
+                        $department = $deptName;
+                        if ($workshop === null) {
+                            $workshop = $resolvedWorkshop ?? ($remainder !== '' ? $remainder : null);
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+
+        return [
+            'department' => $department,
+            'workshop' => $workshop,
+            'product_line' => $line,
+        ];
     }
 
     /**
@@ -97,6 +210,11 @@ class NameNormalizer
      */
     protected function resolve(string $table, ?string $input): ?string
     {
+        if ($input === null) {
+            return null;
+        }
+
+        $input = html_entity_decode(trim($input), ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
         $folded = $this->fold($input);
 
         if ($folded === '') {

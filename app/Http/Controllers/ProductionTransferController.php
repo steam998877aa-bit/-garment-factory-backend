@@ -114,7 +114,9 @@ class ProductionTransferController extends Controller
 
         // Names are canonicalised against the reference tables, so "خياطه" and
         // "خياطة" land on one department instead of quietly becoming two.
-        $toDepartment = $this->names->department($data['to_department']);
+        // Composite names like "خياطة <مصطفى>" extract both department and workshop.
+        $composite = $this->names->parseComposite($data['to_department']);
+        $toDepartment = $composite['department'] ?? $this->names->department($data['to_department']);
 
         if ($toDepartment === null) {
             throw ValidationException::withMessages([
@@ -132,13 +134,15 @@ class ProductionTransferController extends Controller
                     'to_workshop' => ['Unknown workshop. Allowed: '.implode(', ', $this->names->workshopNames())],
                 ]);
             }
+        } elseif ($composite['workshop'] !== null) {
+            $toWorkshop = $this->names->workshop($composite['workshop']) ?? $composite['workshop'];
         }
 
         $production = Production::findOrFail($data['production_id']);
         $from = $production->department;
         $fromWorkshop = $production->workshop;
 
-        if ($from === $toDepartment) {
+        if ($from === $toDepartment && ($toWorkshop === null || $fromWorkshop === $toWorkshop)) {
             throw ValidationException::withMessages([
                 'to_department' => ['The item is already in this department.'],
             ]);
