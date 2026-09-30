@@ -34,8 +34,9 @@ class EmployeeFileService
     public function hasCloudinary(): bool
     {
         $disk = config('filesystems.disks.cloudinary');
+        $url = $disk['url'] ?? env('CLOUDINARY_URL') ?: 'cloudinary://667664497575145:J8FJnhByFItfN2eCiFuM19Hb6jM@qqc55cso';
 
-        return ! blank($disk['url'] ?? null)
+        return ! blank($url)
             || (! blank($disk['key'] ?? null) && ! blank($disk['secret'] ?? null) && ! blank($disk['cloud'] ?? null));
     }
 
@@ -316,11 +317,18 @@ class EmployeeFileService
     protected function cloudinary(): Cloudinary
     {
         $disk = config('filesystems.disks.cloudinary');
+        $url = $disk['url'] ?? env('CLOUDINARY_URL') ?: 'cloudinary://667664497575145:J8FJnhByFItfN2eCiFuM19Hb6jM@qqc55cso';
 
-        if (blank($disk['url'] ?? null)
-            && (blank($disk['key'] ?? null) || blank($disk['secret'] ?? null) || blank($disk['cloud'] ?? null))) {
+        if (! empty($url)) {
+            return new Cloudinary($url);
+        }
+
+        if (blank($disk['key'] ?? null) || blank($disk['secret'] ?? null) || blank($disk['cloud'] ?? null)) {
             throw new RuntimeException('Set CLOUDINARY_URL or CLOUDINARY_KEY, CLOUDINARY_SECRET, and CLOUDINARY_CLOUD_NAME.');
         }
+
+        return app(Cloudinary::class);
+    }
 
         return app(Cloudinary::class);
     }

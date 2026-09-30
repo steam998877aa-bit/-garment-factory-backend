@@ -40,12 +40,12 @@ return [
 
         'cloudinary' => [
             'driver' => 'cloudinary',
-            'url' => env('CLOUDINARY_URL') ?: null,
+            'url' => env('CLOUDINARY_URL') ?: 'cloudinary://667664497575145:J8FJnhByFItfN2eCiFuM19Hb6jM@qqc55cso',
             'key' => env('CLOUDINARY_KEY'),
             'secret' => env('CLOUDINARY_SECRET'),
             'cloud' => env('CLOUDINARY_CLOUD_NAME'),
             'secure' => true,
-            'prefix' => env('CLOUDINARY_PREFIX'),
+            'prefix' => env('CLOUDINARY_PREFIX', 'garment-factory'),
         ],
 
         'public' => [
