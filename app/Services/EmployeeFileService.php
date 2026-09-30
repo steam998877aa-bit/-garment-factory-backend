@@ -3,21 +3,14 @@
 namespace App\Services;
 
 use App\Models\Employee;
-use Cloudinary\Asset\DeliveryType;
-use Cloudinary\Cloudinary;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Stores the identity documents attached to an employee record.
- *
- * Identity documents (ID card scans and CVs) are uploaded directly to Cloudinary
- * permanent storage into dedicated folders (e.g. employees/documents/) and saved
- * as secure public URLs in the database to prevent file loss on server restarts.
+ * Stores employee identity documents on the public local disk.
  */
 class EmployeeFileService
 {
@@ -31,33 +24,21 @@ class EmployeeFileService
 
     public const CV_DIRECTORY = 'employees/cvs';
 
-    public function hasCloudinary(): bool
-    {
-        $disk = config('filesystems.disks.cloudinary');
-        $url = $disk['url'] ?? env('CLOUDINARY_URL') ?: 'cloudinary://667664497575145:J8FJnhByFItfN2eCiFuM19Hb6jM@qqc55cso';
-
-        return ! blank($url)
-            || (! blank($disk['key'] ?? null) && ! blank($disk['secret'] ?? null) && ! blank($disk['cloud'] ?? null));
-    }
-
     /**
      * Store an ID card image, replacing any the employee already had.
      */
     public function storeIdCard(Employee $employee, UploadedFile $file): string
     {
         $this->deleteIdCard($employee);
-
-        if ($this->hasCloudinary()) {
-            try {
-                return $this->uploadDocument($file, 'employees/documents');
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
-
         Storage::disk(self::DISK)->makeDirectory(self::ID_CARD_DIRECTORY);
 
-        return $file->store(self::ID_CARD_DIRECTORY, self::DISK);
+        $path = $file->store(self::ID_CARD_DIRECTORY, self::DISK);
+
+        if (! is_string($path)) {
+            throw new RuntimeException('The employee ID card could not be stored.');
+        }
+
+        return $path;
     }
 
     /**
@@ -66,18 +47,15 @@ class EmployeeFileService
     public function storeCv(Employee $employee, UploadedFile $file): string
     {
         $this->deleteCv($employee);
-
-        if ($this->hasCloudinary()) {
-            try {
-                return $this->uploadDocument($file, 'employees/documents');
-            } catch (\Throwable $e) {
-                report($e);
-            }
-        }
-
         Storage::disk(self::DISK)->makeDirectory(self::CV_DIRECTORY);
 
-        return $file->store(self::CV_DIRECTORY, self::DISK);
+        $path = $file->store(self::CV_DIRECTORY, self::DISK);
+
+        if (! is_string($path)) {
+            throw new RuntimeException('The employee CV could not be stored.');
+        }
+
+        return $path;
     }
 
     public function deleteIdCard(Employee $employee): void
@@ -217,42 +195,6 @@ class EmployeeFileService
         ]);
     }
 
-    /**
-     * Upload document directly to Cloudinary and return full secure URL.
-     */
-    protected function uploadDocument(UploadedFile $file, string $directory): string
-    {
-        $sourcePath = $file->getRealPath();
-
-        if ($sourcePath === false) {
-            throw new RuntimeException('The uploaded document could not be read.');
-        }
-
-        $prefix = trim((string) config('filesystems.disks.cloudinary.prefix'), '/');
-        $folder = trim(implode('/', array_filter([
-            $prefix,
-            $directory,
-        ])), '/');
-
-        $asset = $this->cloudinary()->uploadApi()->upload($sourcePath, [
-            'folder' => $folder,
-            'resource_type' => 'auto',
-            'overwrite' => true,
-        ]);
-
-        if (isset($asset['secure_url'])) {
-            return $asset['secure_url'];
-        }
-
-        if (isset($asset['url'])) {
-            return $asset['url'];
-        }
-
-        $format = strtolower($file->getClientOriginalExtension() ?: 'pdf');
-
-        return self::CLOUDINARY_PREFIX . ($asset['public_id'] ?? Str::uuid()) . '.' . ($asset['format'] ?? $format);
-    }
-
     protected function deleteDocument(string $path): void
     {
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
@@ -279,57 +221,8 @@ class EmployeeFileService
             return;
         }
 
-        if (str_starts_with($path, self::CLOUDINARY_PREFIX)) {
-            try {
-                [$publicId, $format] = $this->cloudinaryParts($path);
-                $resourceType = (strtolower($format) === 'pdf' || in_array(strtolower($format), ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'raw';
-
-                $this->cloudinary()->uploadApi()->destroy($publicId, [
-                    'resource_type' => $resourceType,
-                    'type' => DeliveryType::AUTHENTICATED,
-                    'invalidate' => true,
-                ]);
-            } catch (\Throwable $e) {
-                report($e);
-            }
-            return;
-        }
-
         Storage::disk('public')->delete($path);
         Storage::disk('local')->delete($path);
     }
 
-    /**
-     * @return array{string, string}
-     */
-    protected function cloudinaryParts(string $path): array
-    {
-        $asset = substr($path, strlen(self::CLOUDINARY_PREFIX));
-        $extensionPosition = strrpos($asset, '.');
-
-        if ($extensionPosition === false) {
-            throw new RuntimeException('The Cloudinary document reference is invalid.');
-        }
-
-        return [substr($asset, 0, $extensionPosition), substr($asset, $extensionPosition + 1)];
-    }
-
-    protected function cloudinary(): Cloudinary
-    {
-        $disk = config('filesystems.disks.cloudinary');
-        $url = $disk['url'] ?? env('CLOUDINARY_URL') ?: 'cloudinary://667664497575145:J8FJnhByFItfN2eCiFuM19Hb6jM@qqc55cso';
-
-        if (! empty($url)) {
-            return new Cloudinary($url);
-        }
-
-        if (blank($disk['key'] ?? null) || blank($disk['secret'] ?? null) || blank($disk['cloud'] ?? null)) {
-            throw new RuntimeException('Set CLOUDINARY_URL or CLOUDINARY_KEY, CLOUDINARY_SECRET, and CLOUDINARY_CLOUD_NAME.');
-        }
-
-        return app(Cloudinary::class);
-    }
-
-        return app(Cloudinary::class);
-    }
 }

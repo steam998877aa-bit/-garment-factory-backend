@@ -21,6 +21,15 @@ class EmployeeResource extends JsonResource
      */
     public function toArray(Request $request): array
     {
+        if (! $request->user()?->hasRole('Admin', 'HR')) {
+            return [
+                'id' => $this->id,
+                'name' => $this->name,
+                'department' => $this->department,
+                'position' => $this->position,
+            ];
+        }
+
         return [
             'id' => $this->id,
             'name' => $this->name,

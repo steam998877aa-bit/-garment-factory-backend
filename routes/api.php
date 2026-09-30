@@ -91,35 +91,34 @@ Route::middleware('auth:sanctum')->group(function () {
     | Employees — HR and Admin.
     |----------------------------------------------------------------------
     */
-    Route::middleware('role:Admin,HR')->group(function () {
-        Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
+    Route::get('/employees', [EmployeeController::class, 'index'])->name('employees.index');
+    Route::get('/employees/{employee}', [EmployeeController::class, 'show'])->name('employees.show');
 
+    Route::middleware('role:Admin,HR')->group(function () {
         // Before /employees/{employee}: a literal segment must not be read as
         // a model key. Rewrites staff records, so the controller
         // re-authenticates unless the call is a dry run.
         Route::post('/employees/import', [EmployeeController::class, 'import'])
             ->name('employees.import');
 
-        Route::get('/employees/{employee}', [EmployeeController::class, 'show'])->name('employees.show');
         Route::post('/employees', [EmployeeController::class, 'store'])->name('employees.store');
         Route::patch('/employees/{employee}', [EmployeeController::class, 'update'])->name('employees.update');
 
         Route::get('/employees/{employee}/report', [EmployeeController::class, 'report'])->name('employees.report');
+        Route::get('/employees/{employee}/activity', [EmployeeController::class, 'activity'])
+            ->name('employees.activity');
+    });
 
-        // Issues credentials for another person: Admin only, password confirmed.
+    // Issues credentials and deletes records: Admin only, with policy checks
+    // and password confirmation in the controller.
+    Route::middleware('role:Admin')->group(function () {
         Route::post('/employees/{employee}/portal-account', [EmployeeController::class, 'createPortalAccount'])
             ->name('employees.portal-account');
 
-        // Sensitive: the controller re-authenticates the caller (password in
-        // the request body) and a policy limits deletion to Admin.
-        //
         // POST rather than DELETE: the password travels in the body, and DELETE
         // bodies are unevenly supported by HTTP clients and proxies.
         Route::post('/employees/{employee}/delete', [EmployeeController::class, 'destroy'])
             ->name('employees.destroy');
-
-        Route::get('/employees/{employee}/activity', [EmployeeController::class, 'activity'])
-            ->name('employees.activity');
     });
 
     /*

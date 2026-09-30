@@ -9,12 +9,12 @@ class EmployeePolicy
 {
     public function viewAny(User $user): bool
     {
-        return $user->hasRole('Admin', 'HR');
+        return true;
     }
 
     public function view(User $user, Employee $employee): bool
     {
-        return $user->hasRole('Admin', 'HR');
+        return true;
     }
 
     public function create(User $user): bool

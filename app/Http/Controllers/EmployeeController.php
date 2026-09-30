@@ -70,14 +70,18 @@ class EmployeeController extends Controller
             ->when(isset($filters['shift']), fn ($query) => $query->where('shift', trim($filters['shift'])))
             ->when(isset($filters['search']), function ($query) use ($filters) {
                 $term = '%' . $filters['search'] . '%';
+                $canSearchPrivateFields = request()->user()?->hasRole('Admin', 'HR') ?? false;
 
-                $query->where(function ($inner) use ($term) {
+                $query->where(function ($inner) use ($term, $canSearchPrivateFields) {
                     $inner->where('name', 'like', $term)
-                        ->orWhere('fingerprint_id', 'like', $term)
-                        ->orWhere('phone', 'like', $term)
-                        ->orWhere('email', 'like', $term)
                         ->orWhere('department', 'like', $term)
                         ->orWhere('position', 'like', $term);
+
+                    if ($canSearchPrivateFields) {
+                        $inner->orWhere('fingerprint_id', 'like', $term)
+                            ->orWhere('phone', 'like', $term)
+                            ->orWhere('email', 'like', $term);
+                    }
                 });
             })
             ->orderBy('name')
