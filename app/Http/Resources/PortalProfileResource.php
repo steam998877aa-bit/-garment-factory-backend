@@ -32,10 +32,10 @@ class PortalProfileResource extends JsonResource
             'start_date' => $this->start_date?->toDateString(),
             'vacation_balance' => (float) $this->vacation_balance,
             'id_card_image' => $this->id_card_image === null ? null : [
-                'url' => route('portal.id-card'),
+                'url' => str_starts_with($this->id_card_image, 'http') ? $this->id_card_image : route('portal.id-card'),
             ],
             'cv_file' => $this->cv_file === null ? null : [
-                'url' => route('portal.cv'),
+                'url' => str_starts_with($this->cv_file, 'http') ? $this->cv_file : route('portal.cv'),
             ],
         ];
     }

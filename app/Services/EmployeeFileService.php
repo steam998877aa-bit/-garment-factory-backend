@@ -15,15 +15,17 @@ use Symfony\Component\HttpFoundation\Response;
 /**
  * Stores the identity documents attached to an employee record.
  *
- * These are personal documents — an ID card scan and a CV — so they are kept on
- * the private disk or authenticated Cloudinary storage and reached only through
- * authorised endpoints. A public URL would expose staff identity papers.
+ * Identity documents (ID card scans and CVs) are uploaded directly to Cloudinary
+ * permanent storage into dedicated folders (e.g. employees/documents/) and saved
+ * as secure public URLs in the database to prevent file loss on server restarts.
  */
 class EmployeeFileService
 {
     public const CLOUDINARY_PREFIX = 'cloudinary:';
 
     public const DISK = 'public';
+
+    public const DOCUMENTS_DIRECTORY = 'employees/documents';
 
     public const ID_CARD_DIRECTORY = 'employees/id_cards';
 
@@ -45,11 +47,14 @@ class EmployeeFileService
         $this->deleteIdCard($employee);
 
         if ($this->hasCloudinary()) {
-            return $this->uploadDocument($file, self::ID_CARD_DIRECTORY);
+            try {
+                return $this->uploadDocument($file, 'employees/documents');
+            } catch (\Throwable $e) {
+                report($e);
+            }
         }
 
-        Storage::disk(self::DISK)->makeDirectory('employees/id_cards');
-        Storage::disk(self::DISK)->makeDirectory('employees/id-cards');
+        Storage::disk(self::DISK)->makeDirectory(self::ID_CARD_DIRECTORY);
 
         return $file->store(self::ID_CARD_DIRECTORY, self::DISK);
     }
@@ -62,7 +67,11 @@ class EmployeeFileService
         $this->deleteCv($employee);
 
         if ($this->hasCloudinary()) {
-            return $this->uploadDocument($file, self::CV_DIRECTORY);
+            try {
+                return $this->uploadDocument($file, 'employees/documents');
+            } catch (\Throwable $e) {
+                report($e);
+            }
         }
 
         Storage::disk(self::DISK)->makeDirectory(self::CV_DIRECTORY);
@@ -93,117 +102,123 @@ class EmployeeFileService
         $this->deleteCv($employee);
     }
 
+    /**
+     * Stream or redirect to the employee document with correct PDF response headers.
+     */
     public function response(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): Response
     {
         abort_if(empty($path), Response::HTTP_NOT_FOUND, $missingMessage);
 
-        if (! str_starts_with($path, self::CLOUDINARY_PREFIX)) {
-            $disk = Storage::disk(self::DISK);
+        // 1. Direct Cloudinary full URL or legacy prefix reference
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://') || str_starts_with($path, self::CLOUDINARY_PREFIX)) {
+            $targetUrl = $path;
 
-            $cleanPath = ltrim($path, '/');
-            if (str_starts_with($cleanPath, 'storage/')) {
-                $cleanPath = substr($cleanPath, 8);
-            }
-            if (str_starts_with($cleanPath, 'public/')) {
-                $cleanPath = substr($cleanPath, 7);
-            }
-
-            $foundPath = null;
-            $foundDisk = $disk;
-
-            $candidates = array_unique(array_filter([
-                $cleanPath,
-                $path,
-                str_replace('id-cards', 'id_cards', $cleanPath),
-                str_replace('id_cards', 'id-cards', $cleanPath),
-                'employees/id_cards/' . basename($path),
-                'employees/id-cards/' . basename($path),
-                'employees/cvs/' . basename($path),
-            ]));
-
-            foreach ($candidates as $candidate) {
-                if ($disk->exists($candidate)) {
-                    $foundPath = $candidate;
-                    $foundDisk = $disk;
-                    break;
-                }
-                if (Storage::disk('local')->exists($candidate)) {
-                    $foundPath = $candidate;
-                    $foundDisk = Storage::disk('local');
-                    break;
+            if (str_starts_with($path, self::CLOUDINARY_PREFIX)) {
+                try {
+                    [$publicId, $format] = $this->cloudinaryParts($path);
+                    $targetUrl = $this->cloudinary()->image($publicId)->extension($format)->toUrl();
+                } catch (\Throwable $e) {
+                    report($e);
                 }
             }
 
-            abort_unless($foundPath !== null, Response::HTTP_NOT_FOUND, 'الملف غير موجود على الخادم (يرجى إعادة إرفاقه)');
+            try {
+                $remote = Http::timeout(20)->get($targetUrl);
+                if ($remote->successful() && strlen($remote->body()) > 0) {
+                    $mimeType = $remote->header('Content-Type');
+                    $ext = strtolower(pathinfo(parse_url($targetUrl, PHP_URL_PATH) ?? '', PATHINFO_EXTENSION));
 
-            $mimeType = $foundDisk->mimeType($foundPath);
-            $ext = strtolower(pathinfo($foundPath, PATHINFO_EXTENSION));
-            if ($ext === 'pdf' || empty($mimeType) || $mimeType === 'application/octet-stream' || $mimeType === 'binary/octet-stream') {
-                $mimeType = 'application/pdf';
-            }
+                    if ($ext === 'pdf' || empty($mimeType) || str_contains($mimeType, 'octet-stream') || str_contains($mimeType, 'text/html')) {
+                        $mimeType = 'application/pdf';
+                    }
 
-            $name = $filename ?: basename($foundPath);
-            if ($mimeType === 'application/pdf' && ! str_ends_with(strtolower($name), '.pdf')) {
-                $name .= '.pdf';
-            }
+                    $name = $filename ?: basename(parse_url($targetUrl, PHP_URL_PATH) ?: 'document.pdf');
+                    if (! str_ends_with(strtolower($name), '.pdf')) {
+                        $name .= '.pdf';
+                    }
 
-            if (method_exists($foundDisk, 'path')) {
-                $fullPath = $foundDisk->path($foundPath);
-                if (file_exists($fullPath)) {
-                    return response()->file($fullPath, [
-                        'Content-Type' => $mimeType,
+                    return response($remote->body(), Response::HTTP_OK, [
+                        'Content-Type' => 'application/pdf',
                         'Content-Disposition' => $disposition . '; filename="' . $name . '"',
                         'Cache-Control' => 'private, no-store',
                     ]);
                 }
+            } catch (\Throwable $e) {
+                report($e);
             }
 
-            return response()->streamDownload(function () use ($foundDisk, $foundPath) {
-                echo $foundDisk->get($foundPath);
-            }, $name, [
-                'Content-Type' => $mimeType,
-                'Content-Disposition' => $disposition . '; filename="' . $name . '"',
-                'Cache-Control' => 'private, no-store',
-            ]);
+            // Fallback: Redirect directly to Cloudinary URL
+            return redirect()->away($targetUrl);
         }
 
-        [$publicId, $format] = $this->cloudinaryParts($path);
+        // 2. Local storage file path fallback
+        $disk = Storage::disk(self::DISK);
 
-        $url = $this->cloudinary()->image($publicId)
-            ->deliveryType(DeliveryType::AUTHENTICATED)
-            ->extension($format)
-            ->signUrl()
-            ->toUrl();
-
-        $remote = Http::timeout(30)->get((string) $url);
-
-        if (! $remote->successful()) {
-            $rawUrl = $this->cloudinary()->raw($publicId.'.'.$format)
-                ->deliveryType(DeliveryType::AUTHENTICATED)
-                ->signUrl()
-                ->toUrl();
-            $remote = Http::timeout(30)->get((string) $rawUrl);
+        $cleanPath = ltrim($path, '/');
+        if (str_starts_with($cleanPath, 'storage/')) {
+            $cleanPath = substr($cleanPath, 8);
+        }
+        if (str_starts_with($cleanPath, 'public/')) {
+            $cleanPath = substr($cleanPath, 7);
         }
 
-        abort_unless($remote->successful(), Response::HTTP_NOT_FOUND, 'The stored file is missing.');
+        $foundPath = null;
+        $foundDisk = $disk;
 
-        $mimeType = $remote->header('Content-Type');
-        if (strtolower($format) === 'pdf' || $ext === 'pdf' || empty($mimeType) || $mimeType === 'binary/octet-stream' || $mimeType === 'application/octet-stream') {
-            $mimeType = 'application/pdf';
+        $candidates = array_unique(array_filter([
+            $cleanPath,
+            $path,
+            str_replace('id-cards', 'id_cards', $cleanPath),
+            str_replace('id_cards', 'id-cards', $cleanPath),
+            'employees/documents/' . basename($path),
+            'employees/id_cards/' . basename($path),
+            'employees/id-cards/' . basename($path),
+            'employees/cvs/' . basename($path),
+        ]));
+
+        foreach ($candidates as $candidate) {
+            if ($disk->exists($candidate)) {
+                $foundPath = $candidate;
+                $foundDisk = $disk;
+                break;
+            }
+            if (Storage::disk('local')->exists($candidate)) {
+                $foundPath = $candidate;
+                $foundDisk = Storage::disk('local');
+                break;
+            }
         }
 
-        $name = $filename ?: basename($path);
-        if ($mimeType === 'application/pdf' && ! str_ends_with(strtolower($name), '.pdf')) {
+        abort_unless($foundPath !== null, Response::HTTP_NOT_FOUND, 'الملف غير موجود على الخادم (يرجى إعادة إرفاقه من شاشة تعديل الموظف)');
+
+        $name = $filename ?: basename($foundPath);
+        if (! str_ends_with(strtolower($name), '.pdf')) {
             $name .= '.pdf';
         }
 
-        return response($remote->body(), Response::HTTP_OK, [
-            'Content-Type' => $mimeType,
+        if (method_exists($foundDisk, 'path')) {
+            $fullPath = $foundDisk->path($foundPath);
+            if (file_exists($fullPath)) {
+                return response()->file($fullPath, [
+                    'Content-Type' => 'application/pdf',
+                    'Content-Disposition' => $disposition . '; filename="' . $name . '"',
+                    'Cache-Control' => 'private, no-store',
+                ]);
+            }
+        }
+
+        return response()->streamDownload(function () use ($foundDisk, $foundPath) {
+            echo $foundDisk->get($foundPath);
+        }, $name, [
+            'Content-Type' => 'application/pdf',
             'Content-Disposition' => $disposition . '; filename="' . $name . '"',
             'Cache-Control' => 'private, no-store',
         ]);
     }
 
+    /**
+     * Upload document directly to Cloudinary and return full secure URL.
+     */
     protected function uploadDocument(UploadedFile $file, string $directory): string
     {
         $sourcePath = $file->getRealPath();
@@ -213,42 +228,74 @@ class EmployeeFileService
         }
 
         $prefix = trim((string) config('filesystems.disks.cloudinary.prefix'), '/');
-        $publicId = trim(implode('/', array_filter([
+        $folder = trim(implode('/', array_filter([
             $prefix,
             $directory,
-            (string) Str::uuid(),
         ])), '/');
 
-        $format = strtolower($file->getClientOriginalExtension() ?: 'png');
-        $resourceType = ($format === 'pdf' || in_array($format, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'auto';
-
         $asset = $this->cloudinary()->uploadApi()->upload($sourcePath, [
-            'public_id' => $publicId,
-            'resource_type' => $resourceType,
-            'type' => DeliveryType::AUTHENTICATED,
-            'overwrite' => false,
+            'folder' => $folder,
+            'resource_type' => 'auto',
+            'overwrite' => true,
         ]);
 
-        return self::CLOUDINARY_PREFIX.$asset['public_id'].'.'.($asset['format'] ?? $format);
+        if (isset($asset['secure_url'])) {
+            return $asset['secure_url'];
+        }
+
+        if (isset($asset['url'])) {
+            return $asset['url'];
+        }
+
+        $format = strtolower($file->getClientOriginalExtension() ?: 'pdf');
+
+        return self::CLOUDINARY_PREFIX . ($asset['public_id'] ?? Str::uuid()) . '.' . ($asset['format'] ?? $format);
     }
 
     protected function deleteDocument(string $path): void
     {
-        if (! str_starts_with($path, self::CLOUDINARY_PREFIX)) {
-            Storage::disk('public')->delete($path);
-            Storage::disk('local')->delete($path);
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            if (str_contains($path, 'cloudinary.com')) {
+                try {
+                    $parsedPath = parse_url($path, PHP_URL_PATH);
+                    if ($parsedPath) {
+                        $clean = preg_replace('#^/[^/]+/(image|raw|video|auto)/upload/(v\d+/)?#', '', $parsedPath);
+                        $extensionPos = strrpos($clean, '.');
+                        $publicId = $extensionPos !== false ? substr($clean, 0, $extensionPos) : $clean;
+                        $format = $extensionPos !== false ? strtolower(substr($clean, $extensionPos + 1)) : '';
 
+                        $resourceType = ($format === 'pdf' || in_array($format, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'auto';
+
+                        $this->cloudinary()->uploadApi()->destroy($publicId, [
+                            'resource_type' => $resourceType,
+                            'invalidate' => true,
+                        ]);
+                    }
+                } catch (\Throwable $e) {
+                    report($e);
+                }
+            }
             return;
         }
 
-        [$publicId, $format] = $this->cloudinaryParts($path);
-        $resourceType = (strtolower($format) === 'pdf' || in_array(strtolower($format), ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'raw';
+        if (str_starts_with($path, self::CLOUDINARY_PREFIX)) {
+            try {
+                [$publicId, $format] = $this->cloudinaryParts($path);
+                $resourceType = (strtolower($format) === 'pdf' || in_array(strtolower($format), ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'raw';
 
-        $this->cloudinary()->uploadApi()->destroy($publicId, [
-            'resource_type' => $resourceType,
-            'type' => DeliveryType::AUTHENTICATED,
-            'invalidate' => true,
-        ]);
+                $this->cloudinary()->uploadApi()->destroy($publicId, [
+                    'resource_type' => $resourceType,
+                    'type' => DeliveryType::AUTHENTICATED,
+                    'invalidate' => true,
+                ]);
+            } catch (\Throwable $e) {
+                report($e);
+            }
+            return;
+        }
+
+        Storage::disk('public')->delete($path);
+        Storage::disk('local')->delete($path);
     }
 
     /**

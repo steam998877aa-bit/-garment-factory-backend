@@ -39,20 +39,20 @@ class EmployeeResource extends JsonResource
             'id_card_image' => $this->id_card_image === null ? null : [
                 'path' => $this->id_card_image,
                 'mime_type' => $this->documentMimeType($this->id_card_image),
-                'is_pdf' => strtolower(pathinfo($this->id_card_image, PATHINFO_EXTENSION)) === 'pdf',
-                'url' => URL::temporarySignedRoute(
+                'is_pdf' => str_starts_with($this->id_card_image, 'http') || strtolower(pathinfo($this->id_card_image, PATHINFO_EXTENSION)) === 'pdf',
+                'url' => str_starts_with($this->id_card_image, 'http') ? $this->id_card_image : URL::temporarySignedRoute(
                     'employees.id-card',
-                    now()->addMinutes(10),
+                    now()->addMinutes(60),
                     ['employee' => $this->id],
                 ),
             ],
             'cv_file' => $this->cv_file === null ? null : [
                 'path' => $this->cv_file,
                 'mime_type' => $this->documentMimeType($this->cv_file),
-                'is_pdf' => strtolower(pathinfo($this->cv_file, PATHINFO_EXTENSION)) === 'pdf',
-                'url' => URL::temporarySignedRoute(
+                'is_pdf' => str_starts_with($this->cv_file, 'http') || strtolower(pathinfo($this->cv_file, PATHINFO_EXTENSION)) === 'pdf',
+                'url' => str_starts_with($this->cv_file, 'http') ? $this->cv_file : URL::temporarySignedRoute(
                     'employees.cv',
-                    now()->addMinutes(10),
+                    now()->addMinutes(60),
                     ['employee' => $this->id],
                 ),
             ],
