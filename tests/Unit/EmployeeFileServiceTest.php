@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Models\Employee;
+use App\Http\Resources\PortalProfileResource;
 use App\Services\EmployeeFileService;
 use Cloudinary\Api\ApiResponse;
 use Cloudinary\Api\Upload\UploadApi;
@@ -56,5 +57,22 @@ class EmployeeFileServiceTest extends TestCase
             'status' => true,
             'url' => $url,
         ], json_decode($response->getContent(), true));
+    }
+
+    public function test_portal_profile_exposes_cloudinary_document_urls_directly(): void
+    {
+        $idCardUrl = 'https://res.cloudinary.com/example/id-card.pdf';
+        $cvUrl = 'https://res.cloudinary.com/example/cv.pdf';
+        $employee = new Employee([
+            'id_card_image' => $idCardUrl,
+            'cv_file' => $cvUrl,
+        ]);
+
+        $profile = (new PortalProfileResource($employee))->toArray(request());
+
+        $this->assertSame($idCardUrl, $profile['id_card_path']);
+        $this->assertSame($cvUrl, $profile['cv_path']);
+        $this->assertSame($idCardUrl, $profile['id_card_image']['url']);
+        $this->assertSame($cvUrl, $profile['cv_file']['url']);
     }
 }
