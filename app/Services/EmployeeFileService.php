@@ -198,6 +198,8 @@ class EmployeeFileService
         $upload = Cloudinary::uploadApi()->upload($sourcePath, [
             'folder' => 'employee_documents',
             'resource_type' => 'auto',
+            'type' => 'upload',
+            'access_mode' => 'public',
         ]);
 
         if (! is_string($upload['secure_url'] ?? null)) {

@@ -23,7 +23,12 @@ class EmployeeFileServiceTest extends TestCase
         $uploadApi->shouldReceive('upload')
             ->twice()
             ->withArgs(fn (string $path, array $options): bool => is_file($path)
-                && $options === ['folder' => 'employee_documents', 'resource_type' => 'auto'])
+                && $options === [
+                    'folder' => 'employee_documents',
+                    'resource_type' => 'auto',
+                    'type' => 'upload',
+                    'access_mode' => 'public',
+                ])
             ->andReturn(
                 new ApiResponse(['secure_url' => 'https://res.cloudinary.com/example/id-card.pdf'], []),
                 new ApiResponse(['secure_url' => 'https://res.cloudinary.com/example/cv.pdf'], []),
