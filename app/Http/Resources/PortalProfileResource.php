@@ -31,8 +31,8 @@ class PortalProfileResource extends JsonResource
             'address' => $this->address,
             'start_date' => $this->start_date?->toDateString(),
             'vacation_balance' => (float) $this->vacation_balance,
-            'id_card_path' => $this->documentUrl($this->id_card_image, 'portal.id-card'),
-            'cv_path' => $this->documentUrl($this->cv_file, 'portal.cv'),
+            'id_card_path' => $this->documentUrl($this->id_card_image),
+            'cv_path' => $this->documentUrl($this->cv_file),
             'id_card_image' => $this->id_card_image === null ? null : [
                 'url' => str_starts_with($this->id_card_image, 'http') ? $this->id_card_image : route('portal.id-card'),
             ],
@@ -42,14 +42,11 @@ class PortalProfileResource extends JsonResource
         ];
     }
 
-    protected function documentUrl(?string $path, string $route): ?string
+    protected function documentUrl(?string $path): ?string
     {
-        if ($path === null) {
-            return null;
-        }
-
-        return str_starts_with($path, 'http://') || str_starts_with($path, 'https://')
-            ? $path
-            : route($route);
+        return filter_var($path, FILTER_VALIDATE_URL) !== false
+            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true)
+                ? $path
+                : null;
     }
 }

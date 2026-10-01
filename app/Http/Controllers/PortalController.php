@@ -7,11 +7,8 @@ use App\Http\Resources\PortalProfileResource;
 use App\Models\Attendance;
 use App\Models\Employee;
 use App\Services\AttendanceStatisticsService;
-use App\Services\EmployeeFileService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
  * Employee self-service.
@@ -25,7 +22,6 @@ class PortalController extends Controller
 {
     public function __construct(
         protected AttendanceStatisticsService $statistics,
-        protected EmployeeFileService $files,
     ) {
     }
 
@@ -124,33 +120,29 @@ class PortalController extends Controller
     }
 
     /**
-     * The employee's own ID card scan.
+     * Redirect to the employee's Cloudinary ID card or return a missing-file response.
      */
     public function idCard(Request $request): \Symfony\Component\HttpFoundation\Response
     {
-        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
+        $path = $this->employee($request)->id_card_image;
+        if (! $this->isHttpUrl($path)) {
+            return $this->missingDocumentResponse();
+        }
 
-        return $this->streamOwnDocument(
-            $this->employee($request)->id_card_image,
-            'You have no ID card on file.',
-            $disposition,
-            'document.pdf'
-        );
+        return redirect()->away($path);
     }
 
     /**
-     * The employee's own CV.
+     * Redirect to the employee's Cloudinary CV or return a missing-file response.
      */
     public function cv(Request $request): \Symfony\Component\HttpFoundation\Response
     {
-        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
+        $path = $this->employee($request)->cv_file;
+        if (! $this->isHttpUrl($path)) {
+            return $this->missingDocumentResponse();
+        }
 
-        return $this->streamOwnDocument(
-            $this->employee($request)->cv_file,
-            'You have no CV on file.',
-            $disposition,
-            'document.pdf'
-        );
+        return redirect()->away($path);
     }
 
     /**
@@ -169,11 +161,17 @@ class PortalController extends Controller
         return $employee;
     }
 
-    /**
-     * Send one of the employee's own documents.
-     */
-    protected function streamOwnDocument(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): \Symfony\Component\HttpFoundation\Response
+    protected function isHttpUrl(?string $path): bool
     {
-        return $this->files->response($path, $missingMessage, $disposition, $filename);
+        return filter_var($path, FILTER_VALIDATE_URL) !== false
+            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true);
+    }
+
+    protected function missingDocumentResponse(): JsonResponse
+    {
+        return response()->json([
+            'url' => null,
+            'message' => 'الملف غير موجود، يرجى إعادة الرفع',
+        ], JsonResponse::HTTP_NOT_FOUND);
     }
 }

@@ -45,8 +45,8 @@ class EmployeeResource extends JsonResource
             'address' => $this->address,
             'start_date' => $this->start_date?->toDateString(),
             'documents' => $this->documents,
-            'id_card_path' => $this->documentUrl($this->id_card_image, 'employees.id-card', $this->id),
-            'cv_path' => $this->documentUrl($this->cv_file, 'employees.cv', $this->id),
+            'id_card_path' => $this->documentUrl($this->id_card_image),
+            'cv_path' => $this->documentUrl($this->cv_file),
             'id_card_image' => $this->id_card_image === null ? null : [
                 'path' => $this->id_card_image,
                 'mime_type' => $this->documentMimeType($this->id_card_image),
@@ -72,15 +72,12 @@ class EmployeeResource extends JsonResource
         ];
     }
 
-    protected function documentUrl(?string $path, string $route, int $employeeId): ?string
+    protected function documentUrl(?string $path): ?string
     {
-        if ($path === null) {
-            return null;
-        }
-
-        return str_starts_with($path, 'http://') || str_starts_with($path, 'https://')
-            ? $path
-            : URL::temporarySignedRoute($route, now()->addMinutes(60), ['employee' => $employeeId]);
+        return filter_var($path, FILTER_VALIDATE_URL) !== false
+            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true)
+                ? $path
+                : null;
     }
 
     protected function documentMimeType(string $path): string

@@ -83,4 +83,89 @@ class EmployeeReadAccessTest extends TestCase
         $this->get($idCardRoute)->assertRedirect($idCardUrl);
         $this->get($cvRoute)->assertRedirect($cvUrl);
     }
+
+    public function test_invalid_employee_document_signature_returns_the_expected_404_json(): void
+    {
+        $employee = Employee::create([
+            'name' => 'Invalid Signature Test',
+            'fingerprint_id' => 'DOC-002',
+            'department' => 'Administration',
+            'position' => 'Assistant',
+            'phone' => '555-0102',
+            'salary' => 0,
+        ]);
+
+        $this->getJson("/api/employees/{$employee->id}/id-card")
+            ->assertNotFound()
+            ->assertExactJson([
+                'url' => null,
+                'message' => 'الملف غير موجود، يرجى إعادة الرفع',
+            ]);
+    }
+
+    public function test_employee_document_with_non_url_path_returns_the_expected_404_json(): void
+    {
+        $employee = Employee::create([
+            'name' => 'Legacy Document Test',
+            'fingerprint_id' => 'DOC-003',
+            'department' => 'Administration',
+            'position' => 'Assistant',
+            'phone' => '555-0103',
+            'salary' => 0,
+            'id_card_image' => 'employees/id_cards/legacy.pdf',
+        ]);
+        $signedUrl = URL::temporarySignedRoute(
+            'employees.id-card',
+            now()->addMinutes(5),
+            ['employee' => $employee->id],
+        );
+
+        $this->getJson($signedUrl)
+            ->assertNotFound()
+            ->assertExactJson([
+                'url' => null,
+                'message' => 'الملف غير موجود، يرجى إعادة الرفع',
+            ]);
+    }
+
+    public function test_portal_document_routes_redirect_cloudinary_and_return_404_for_local_paths(): void
+    {
+        $employee = Employee::create([
+            'name' => 'Portal Document Test',
+            'fingerprint_id' => 'DOC-004',
+            'department' => 'Administration',
+            'position' => 'Assistant',
+            'phone' => '555-0104',
+            'salary' => 0,
+            'id_card_image' => 'employees/id_cards/legacy.pdf',
+            'cv_file' => 'employees/cvs/legacy.pdf',
+        ]);
+        $user = User::factory()->create(['employee_id' => $employee->id]);
+        $token = $user->createToken('portal-document-test')->plainTextToken;
+
+        $this->withHeader('Authorization', 'Bearer '.$token)
+            ->getJson('/api/portal/id-card')
+            ->assertNotFound()
+            ->assertExactJson([
+                'url' => null,
+                'message' => 'الملف غير موجود، يرجى إعادة الرفع',
+            ]);
+        $this->getJson('/api/portal/cv')
+            ->assertNotFound()
+            ->assertExactJson([
+                'url' => null,
+                'message' => 'الملف غير موجود، يرجى إعادة الرفع',
+            ]);
+
+        $idCardUrl = 'https://res.cloudinary.com/example/employee_documents/id-card.pdf';
+        $cvUrl = 'https://res.cloudinary.com/example/employee_documents/cv.pdf';
+        $employee->update([
+            'id_card_image' => $idCardUrl,
+            'cv_file' => $cvUrl,
+        ]);
+        $this->app['auth']->forgetGuards();
+
+        $this->getJson('/api/portal/id-card')->assertRedirect($idCardUrl);
+        $this->getJson('/api/portal/cv')->assertRedirect($cvUrl);
+    }
 }

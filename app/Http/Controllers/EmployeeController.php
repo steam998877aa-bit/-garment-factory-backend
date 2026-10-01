@@ -310,35 +310,29 @@ class EmployeeController extends Controller
     }
 
     /**
-     * Stream the employee's ID card to an authorised caller.
+     * Redirect to the employee's Cloudinary ID card or return a missing-file response.
      */
-    public function idCard(Request $request, Employee $employee): \Symfony\Component\HttpFoundation\Response
+    public function idCard(Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
         $path = $employee->id_card_image;
-        if (filter_var($path, FILTER_VALIDATE_URL)
-            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true)) {
-            return redirect()->away($path);
+        if (! $this->isHttpUrl($path)) {
+            return $this->missingDocumentResponse();
         }
 
-        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
-
-        return $this->streamDocument($path, 'This employee has no ID card on file.', $disposition, 'document.pdf');
+        return redirect()->away($path);
     }
 
     /**
-     * Stream the employee's CV to an authorised caller.
+     * Redirect to the employee's Cloudinary CV or return a missing-file response.
      */
-    public function cv(Request $request, Employee $employee): \Symfony\Component\HttpFoundation\Response
+    public function cv(Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
         $path = $employee->cv_file;
-        if (filter_var($path, FILTER_VALIDATE_URL)
-            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true)) {
-            return redirect()->away($path);
+        if (! $this->isHttpUrl($path)) {
+            return $this->missingDocumentResponse();
         }
 
-        $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
-
-        return $this->streamDocument($path, 'This employee has no CV on file.', $disposition, 'document.pdf');
+        return redirect()->away($path);
     }
 
     /**
@@ -508,12 +502,18 @@ class EmployeeController extends Controller
         $employee->save();
     }
 
-    /**
-     * Send a stored document, or 404 when it is absent.
-     */
-    protected function streamDocument(?string $path, string $missingMessage, string $disposition = 'inline', string $filename = 'document.pdf'): \Symfony\Component\HttpFoundation\Response
+    protected function isHttpUrl(?string $path): bool
     {
-        return $this->files->response($path, $missingMessage, $disposition, $filename);
+        return filter_var($path, FILTER_VALIDATE_URL) !== false
+            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true);
+    }
+
+    protected function missingDocumentResponse(): JsonResponse
+    {
+        return response()->json([
+            'url' => null,
+            'message' => 'الملف غير موجود، يرجى إعادة الرفع',
+        ], JsonResponse::HTTP_NOT_FOUND);
     }
     /**
      * @return array<string, mixed>
