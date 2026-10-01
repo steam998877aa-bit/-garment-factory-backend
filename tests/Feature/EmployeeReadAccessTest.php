@@ -7,6 +7,7 @@ use App\Models\Role;
 use App\Models\User;
 use Database\Seeders\RoleSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\URL;
 use Tests\TestCase;
 
 class EmployeeReadAccessTest extends TestCase
@@ -51,5 +52,35 @@ class EmployeeReadAccessTest extends TestCase
                 'department' => 'Administration',
             ])
             ->assertForbidden();
+    }
+
+    public function test_signed_document_routes_redirect_directly_to_cloudinary_without_a_bearer_token(): void
+    {
+        $idCardUrl = 'https://res.cloudinary.com/example/employee_documents/id-card.pdf';
+        $cvUrl = 'https://res.cloudinary.com/example/employee_documents/cv.pdf';
+        $employee = Employee::create([
+            'name' => 'Document Redirect Test',
+            'fingerprint_id' => 'DOC-001',
+            'department' => 'Administration',
+            'position' => 'Assistant',
+            'phone' => '555-0101',
+            'salary' => 0,
+            'id_card_image' => $idCardUrl,
+            'cv_file' => $cvUrl,
+        ]);
+
+        $idCardRoute = URL::temporarySignedRoute(
+            'employees.id-card',
+            now()->addMinutes(5),
+            ['employee' => $employee->id],
+        );
+        $cvRoute = URL::temporarySignedRoute(
+            'employees.cv',
+            now()->addMinutes(5),
+            ['employee' => $employee->id],
+        );
+
+        $this->get($idCardRoute)->assertRedirect($idCardUrl);
+        $this->get($cvRoute)->assertRedirect($cvUrl);
     }
 }

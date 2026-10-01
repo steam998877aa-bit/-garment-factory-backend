@@ -314,9 +314,15 @@ class EmployeeController extends Controller
      */
     public function idCard(Request $request, Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
+        $path = $employee->id_card_image;
+        if (filter_var($path, FILTER_VALIDATE_URL)
+            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true)) {
+            return redirect()->away($path);
+        }
+
         $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
 
-        return $this->streamDocument($employee->id_card_image, 'This employee has no ID card on file.', $disposition, 'document.pdf');
+        return $this->streamDocument($path, 'This employee has no ID card on file.', $disposition, 'document.pdf');
     }
 
     /**
@@ -324,9 +330,15 @@ class EmployeeController extends Controller
      */
     public function cv(Request $request, Employee $employee): \Symfony\Component\HttpFoundation\Response
     {
+        $path = $employee->cv_file;
+        if (filter_var($path, FILTER_VALIDATE_URL)
+            && in_array(parse_url($path, PHP_URL_SCHEME), ['http', 'https'], true)) {
+            return redirect()->away($path);
+        }
+
         $disposition = ($request->boolean('download') || $request->header('X-Disposition') === 'attachment' || $request->header('X-Download') == '1' || $request->query('disposition') === 'attachment') ? 'attachment' : 'inline';
 
-        return $this->streamDocument($employee->cv_file, 'This employee has no CV on file.', $disposition, 'document.pdf');
+        return $this->streamDocument($path, 'This employee has no CV on file.', $disposition, 'document.pdf');
     }
 
     /**
