@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Employee;
+use CloudinaryLabs\CloudinaryLaravel\Facades\Cloudinary;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
@@ -10,7 +11,7 @@ use RuntimeException;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
- * Stores employee identity documents on the public local disk.
+ * Stores employee documents in Cloudinary and supports legacy local files.
  */
 class EmployeeFileService
 {
@@ -29,16 +30,10 @@ class EmployeeFileService
      */
     public function storeIdCard(Employee $employee, UploadedFile $file): string
     {
+        $secureUrl = $this->uploadDocument($file);
         $this->deleteIdCard($employee);
-        Storage::disk(self::DISK)->makeDirectory(self::ID_CARD_DIRECTORY);
 
-        $path = $file->store(self::ID_CARD_DIRECTORY, self::DISK);
-
-        if (! is_string($path)) {
-            throw new RuntimeException('The employee ID card could not be stored.');
-        }
-
-        return $path;
+        return $secureUrl;
     }
 
     /**
@@ -46,16 +41,10 @@ class EmployeeFileService
      */
     public function storeCv(Employee $employee, UploadedFile $file): string
     {
+        $secureUrl = $this->uploadDocument($file);
         $this->deleteCv($employee);
-        Storage::disk(self::DISK)->makeDirectory(self::CV_DIRECTORY);
 
-        $path = $file->store(self::CV_DIRECTORY, self::DISK);
-
-        if (! is_string($path)) {
-            throw new RuntimeException('The employee CV could not be stored.');
-        }
-
-        return $path;
+        return $secureUrl;
     }
 
     public function deleteIdCard(Employee $employee): void
@@ -88,17 +77,22 @@ class EmployeeFileService
     {
         abort_if(empty($path), Response::HTTP_NOT_FOUND, $missingMessage);
 
-        // 1. Direct Cloudinary full URL or legacy prefix reference
-        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://') || str_starts_with($path, self::CLOUDINARY_PREFIX)) {
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            return response()->json([
+                'status' => true,
+                'url' => $path,
+            ]);
+        }
+
+        // Legacy Cloudinary prefix references retain the existing stream behavior.
+        if (str_starts_with($path, self::CLOUDINARY_PREFIX)) {
             $targetUrl = $path;
 
-            if (str_starts_with($path, self::CLOUDINARY_PREFIX)) {
-                try {
-                    [$publicId, $format] = $this->cloudinaryParts($path);
-                    $targetUrl = $this->cloudinary()->image($publicId)->extension($format)->toUrl();
-                } catch (\Throwable $e) {
-                    report($e);
-                }
+            try {
+                [$publicId, $format] = $this->cloudinaryParts($path);
+                $targetUrl = Cloudinary::image($publicId)->extension($format)->toUrl();
+            } catch (\Throwable $e) {
+                report($e);
             }
 
             try {
@@ -126,11 +120,9 @@ class EmployeeFileService
                 report($e);
             }
 
-            // Fallback: Redirect directly to Cloudinary URL
             return redirect()->away($targetUrl);
         }
 
-        // 2. Local storage file path fallback
         $disk = Storage::disk(self::DISK);
 
         $cleanPath = ltrim($path, '/');
@@ -195,6 +187,26 @@ class EmployeeFileService
         ]);
     }
 
+    protected function uploadDocument(UploadedFile $file): string
+    {
+        $sourcePath = $file->getRealPath();
+
+        if ($sourcePath === false) {
+            throw new RuntimeException('The employee document could not be read.');
+        }
+
+        $upload = Cloudinary::uploadApi()->upload($sourcePath, [
+            'folder' => 'employee_documents',
+            'resource_type' => 'auto',
+        ]);
+
+        if (! is_string($upload['secure_url'] ?? null)) {
+            throw new RuntimeException('Cloudinary did not return a secure URL for the employee document.');
+        }
+
+        return $upload['secure_url'];
+    }
+
     protected function deleteDocument(string $path): void
     {
         if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
@@ -202,22 +214,24 @@ class EmployeeFileService
                 try {
                     $parsedPath = parse_url($path, PHP_URL_PATH);
                     if ($parsedPath) {
-                        $clean = preg_replace('#^/[^/]+/(image|raw|video|auto)/upload/(v\d+/)?#', '', $parsedPath);
-                        $extensionPos = strrpos($clean, '.');
-                        $publicId = $extensionPos !== false ? substr($clean, 0, $extensionPos) : $clean;
-                        $format = $extensionPos !== false ? strtolower(substr($clean, $extensionPos + 1)) : '';
-
+                        $clean = preg_replace('#^/[^/]+/(image|raw|video|auto)/upload/(v\\d+/)?#', '', $parsedPath);
+                        $extensionPosition = strrpos($clean, '.');
+                        $publicId = $extensionPosition !== false ? substr($clean, 0, $extensionPosition) : $clean;
+                        $format = $extensionPosition !== false ? strtolower(substr($clean, $extensionPosition + 1)) : '';
                         $resourceType = ($format === 'pdf' || in_array($format, ['jpg', 'jpeg', 'png', 'webp', 'gif'], true)) ? 'image' : 'auto';
 
-                        $this->cloudinary()->uploadApi()->destroy($publicId, [
+                        Cloudinary::uploadApi()->destroy($publicId, [
                             'resource_type' => $resourceType,
                             'invalidate' => true,
                         ]);
                     }
-                } catch (\Throwable $e) {
-                    report($e);
+                } catch (\Throwable $exception) {
+                    report($exception);
                 }
+
+                return;
             }
+
             return;
         }
 
@@ -225,4 +239,18 @@ class EmployeeFileService
         Storage::disk('local')->delete($path);
     }
 
+    /**
+     * @return array{string, string}
+     */
+    protected function cloudinaryParts(string $path): array
+    {
+        $asset = substr($path, strlen(self::CLOUDINARY_PREFIX));
+        $extensionPosition = strrpos($asset, '.');
+
+        if ($extensionPosition === false) {
+            throw new RuntimeException('The Cloudinary document reference is invalid.');
+        }
+
+        return [substr($asset, 0, $extensionPosition), substr($asset, $extensionPosition + 1)];
+    }
 }
