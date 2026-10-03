@@ -86,6 +86,7 @@ class AttendanceController extends Controller
 
         // Report the name the user recognises, not the generated one.
         $result['file'] = $upload->getClientOriginalName();
+        $warnings = $result['warnings'] ?? [];
 
         if (! $dryRun) {
             $this->audit->log('attendance.imported', [
@@ -99,11 +100,12 @@ class AttendanceController extends Controller
 
         return response()->json([
             'status' => true,
-            'message' => $dryRun
+            'message' => ($dryRun
                 ? "Validated {$result['parsed']} record(s). Nothing was saved."
-                : "Imported {$result['imported']} attendance record(s).",
+                : "Imported {$result['imported']} attendance record(s).") . ($dryRun && $warnings !== [] ? ' ' . implode(' ', $warnings) : ''),
             'total_rows' => $result['total_rows'] ?? 0,
             'parsed' => $result['parsed'] ?? 0,
+            'warnings' => $warnings,
             'summary' => $result,
         ]);
     }

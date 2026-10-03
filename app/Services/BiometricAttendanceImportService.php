@@ -47,6 +47,9 @@ class BiometricAttendanceImportService
                 'failed' => 0,
                 'unmatched_fingerprints' => [],
                 'dates_imported' => [],
+                'skipped_rows' => 0,
+                'skipped_reasons' => [],
+                'warnings' => [],
             ];
         }
 
@@ -54,6 +57,10 @@ class BiometricAttendanceImportService
         $punchesByEmpAndDate = [];
         $unmatched = [];
         $importedDates = [];
+        $skippedReasons = [
+            'missing_fingerprint' => 0,
+            'invalid_date' => 0,
+        ];
 
         $employeesMap = Employee::query()
             ->whereNotNull('fingerprint_id')
@@ -74,6 +81,7 @@ class BiometricAttendanceImportService
             $fingerprintId = $this->extractFingerprintId($valC, $valA);
 
             if ($fingerprintId === null) {
+                $skippedReasons['missing_fingerprint']++;
                 continue; // Skip non-numeric header rows
             }
 
@@ -97,16 +105,21 @@ class BiometricAttendanceImportService
             }
 
             // Punch log format: 1 row per punch
-            $dt = $this->parseDateTime(!empty($valE) ? $valE : $valD);
+            $datePart = $this->normaliseDate($valD);
+            if (!empty($valE) && $this->isTimeString($valE)) {
+                $dt = $datePart !== null ? $this->parseDateTime($datePart . ' ' . $valE) : null;
+            } else {
+                $dt = $this->parseDateTime(!empty($valE) ? $valE : $valD);
+            }
 
             if ($dt === null) {
-                $datePart = $this->normaliseDate($valD);
                 if ($datePart && !empty($valE)) {
                     $dt = $this->parseDateTime($datePart . ' ' . $valE);
                 }
             }
 
             if ($dt === null) {
+                $skippedReasons['invalid_date']++;
                 continue;
             }
 
@@ -205,6 +218,15 @@ class BiometricAttendanceImportService
 
         $finalRows = array_values($rows);
         $matchedCount = count(array_filter($finalRows, fn($r) => $r['employee_id'] !== null));
+        $skippedRows = array_sum($skippedReasons);
+        $warnings = [];
+
+        if ($skippedReasons['missing_fingerprint'] > 0) {
+            $warnings[] = "تم تخطي {$skippedReasons['missing_fingerprint']} صف لعدم وجود رقم بصمة رقمي.";
+        }
+        if ($skippedReasons['invalid_date'] > 0) {
+            $warnings[] = "تم تخطي {$skippedReasons['invalid_date']} صف لعدم إمكانية قراءة التاريخ أو الوقت.";
+        }
 
         if (!$dryRun && !empty($finalRows)) {
             foreach (array_chunk($finalRows, 500) as $chunk) {
@@ -230,6 +252,9 @@ class BiometricAttendanceImportService
             'failed' => 0,
             'unmatched_fingerprints' => array_values($unmatched),
             'dates_imported' => array_keys($importedDates),
+            'skipped_rows' => $skippedRows,
+            'skipped_reasons' => $skippedReasons,
+            'warnings' => $warnings,
         ];
     }
 
@@ -407,6 +432,10 @@ class BiometricAttendanceImportService
                 } else {
                     $day = $p1;
                     $month = $p2;
+                }
+
+                if (!checkdate($month, $day, $year)) {
+                    return null;
                 }
 
                 $dateString = sprintf('%04d-%02d-%02d', $year, $month, $day);
