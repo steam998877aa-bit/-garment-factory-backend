@@ -413,8 +413,8 @@ class BiometricAttendanceImportService
         $str = $this->sanitizeEncoding($value);
         if (empty($str)) return null;
 
-        $str = str_replace(['ص', 'صباحا', 'صباحاً'], 'AM', $str);
-        $str = str_replace(['م', 'مساء', 'مساءً'], 'PM', $str);
+        $str = str_replace(['صباحاً', 'صباحا', 'صباحًا', 'ص'], 'AM', $str);
+        $str = str_replace(['مساءً', 'مساءا', 'مساءًا', 'مساء', 'م'], 'PM', $str);
 
         try {
             if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(.*))?$/i', $str, $matches)) {
