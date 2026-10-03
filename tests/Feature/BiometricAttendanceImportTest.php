@@ -4,6 +4,9 @@ namespace Tests\Feature;
 
 use App\Services\BiometricAttendanceImportService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use PhpOffice\PhpSpreadsheet\IOFactory;
+use PhpOffice\PhpSpreadsheet\Spreadsheet;
+use PhpOffice\PhpSpreadsheet\Writer\Xls;
 use Tests\TestCase;
 
 class BiometricAttendanceImportTest extends TestCase
@@ -41,40 +44,42 @@ class BiometricAttendanceImportTest extends TestCase
         $this->assertSame(['2026-10-31', '2026-11-30', '2026-12-31'], $result['dates_imported']);
     }
 
-    public function test_import_parses_499_arabic_punch_timestamps_without_skipping_rows(): void
+    public function test_imports_all_data_rows_from_xls_with_mangled_headers_and_arabic_symbols(): void
     {
-        $service = new class extends BiometricAttendanceImportService
-        {
-            protected function readGrid(string $path): array
-            {
-                $rows = [];
-                $markers = ['ص', 'م', 'صباحاً', 'مساءً'];
+        $spreadsheet = new Spreadsheet();
+        $sheet = $spreadsheet->getActiveSheet();
+        $sheet->setCellValue('A1', '艳轻洼金');
+        $sheet->setCellValue('D1', '日期◆');
+        $sheet->setCellValue('E1', '日期时间※');
+        $markers = ['ص', 'م', 'صباحاً', 'مساءً'];
 
-                for ($row = 1; $row <= 499; $row++) {
-                    $rows[] = [
-                        'A' => (string) (1000 + $row),
-                        'D' => '10/01/2026',
-                        'E' => '01/10/2026 09:24:27 ' . $markers[($row - 1) % count($markers)],
-                    ];
-                }
-
-                return $rows;
-            }
-        };
-
-        $path = tempnam(sys_get_temp_dir(), 'biometric-import-');
-        file_put_contents($path, 'test');
-
-        try {
-            $result = $service->import($path, true);
-        } finally {
-            unlink($path);
+        for ($row = 2; $row <= 500; $row++) {
+            $sheet->setCellValue('A' . $row, (string) (1000 + $row));
+            $sheet->setCellValue('D' . $row, '10/01/2026');
+            $sheet->setCellValue(
+                'E' . $row,
+                '01/10/2026 09:24:27 ' . $markers[($row - 2) % count($markers)] . '◆※'
+            );
         }
 
-        $this->assertSame(499, $result['total_rows']);
+        $temporaryPath = tempnam(sys_get_temp_dir(), 'biometric-import-');
+        $path = $temporaryPath . '.xls';
+        unlink($temporaryPath);
+        (new Xls($spreadsheet))->save($path);
+        $this->assertGreaterThan(0, filesize($path));
+        $this->assertSame('Xls', IOFactory::identify($path));
+
+        try {
+            $result = app(BiometricAttendanceImportService::class)->import($path, true);
+        } finally {
+            unlink($path);
+            $spreadsheet->disconnectWorksheets();
+        }
+
+        $this->assertSame(500, $result['total_rows']);
         $this->assertSame(499, $result['parsed']);
-        $this->assertSame(0, $result['skipped_rows']);
-        $this->assertSame([], $result['warnings']);
+        $this->assertSame(1, $result['skipped_rows']);
+        $this->assertSame(0, $result['skipped_reasons']['invalid_date']);
         $this->assertSame(['2026-10-01'], $result['dates_imported']);
     }
 }

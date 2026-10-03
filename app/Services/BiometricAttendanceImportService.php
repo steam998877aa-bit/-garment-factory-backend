@@ -68,14 +68,14 @@ class BiometricAttendanceImportService
             ->keyBy(fn ($e) => (string) $e->fingerprint_id);
 
         foreach ($grid as $rowIndex => $cells) {
-            $valA = $this->sanitizeEncoding($cells['A'] ?? $cells[0] ?? '');
-            $valB = $this->sanitizeEncoding($cells['B'] ?? $cells[1] ?? '');
-            $valC = $this->sanitizeEncoding($cells['C'] ?? $cells[2] ?? '');
-            $valD = $this->sanitizeEncoding($cells['D'] ?? $cells[3] ?? '');
-            $valE = $this->sanitizeEncoding($cells['E'] ?? $cells[4] ?? '');
-            $valF = $this->sanitizeEncoding($cells['F'] ?? $cells[5] ?? '');
-            $valG = $this->sanitizeEncoding($cells['G'] ?? $cells[6] ?? '');
-            $valH = $this->sanitizeEncoding($cells['H'] ?? $cells[7] ?? '');
+            $valA = $this->sanitizeEncoding($this->cellAt($cells, 'A', 0));
+            $valB = $this->sanitizeEncoding($this->cellAt($cells, 'B', 1));
+            $valC = $this->sanitizeEncoding($this->cellAt($cells, 'C', 2));
+            $valD = $this->sanitizeEncoding($this->cellAt($cells, 'D', 3));
+            $valE = $this->sanitizeEncoding($this->cellAt($cells, 'E', 4));
+            $valF = $this->sanitizeEncoding($this->cellAt($cells, 'F', 5));
+            $valG = $this->sanitizeEncoding($this->cellAt($cells, 'G', 6));
+            $valH = $this->sanitizeEncoding($this->cellAt($cells, 'H', 7));
 
             // Determine Fingerprint ID
             $fingerprintId = $this->extractFingerprintId($valC, $valA);
@@ -346,6 +346,27 @@ class BiometricAttendanceImportService
         return trim($str);
     }
 
+    protected function cellAt(array $row, string $column, int $index): mixed
+    {
+        return $row[$column] ?? $row[$index] ?? '';
+    }
+
+    protected function sanitizeDateTimeText(string $value): string
+    {
+        $value = str_replace(['صباحاً', 'صباحا', 'صباحًا', 'ص'], 'AM', $value);
+        $value = str_replace(['مساءً', 'مساءا', 'مساءًا', 'مساء', 'م'], 'PM', $value);
+        $value = strtr($value, [
+            '٠' => '0', '١' => '1', '٢' => '2', '٣' => '3', '٤' => '4',
+            '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
+            '۰' => '0', '۱' => '1', '۲' => '2', '۳' => '3', '۴' => '4',
+            '۵' => '5', '۶' => '6', '۷' => '7', '۸' => '8', '۹' => '9',
+        ]);
+        $value = preg_replace('/[^\x20-\x7E]/', '', $value) ?? '';
+        $value = preg_replace('/\s+/', ' ', $value) ?? '';
+
+        return trim($value);
+    }
+
     protected function isTimeString(string $value): bool
     {
         return preg_match('/^\d{1,2}:\d{2}(?::\d{2})?$/', trim($value)) === 1;
@@ -410,11 +431,8 @@ class BiometricAttendanceImportService
             } catch (Throwable) {}
         }
 
-        $str = $this->sanitizeEncoding($value);
+        $str = $this->sanitizeDateTimeText($this->sanitizeEncoding($value));
         if (empty($str)) return null;
-
-        $str = str_replace(['صباحاً', 'صباحا', 'صباحًا', 'ص'], 'AM', $str);
-        $str = str_replace(['مساءً', 'مساءا', 'مساءًا', 'مساء', 'م'], 'PM', $str);
 
         try {
             if (preg_match('/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+(.*))?$/i', $str, $matches)) {
